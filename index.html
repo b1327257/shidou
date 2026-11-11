@@ -1057,20 +1057,29 @@
     .test-reveal-btn:hover {
       background: #f8fafc;
     }
-    .test-finish-btn {
-      flex: 1.5;
-      min-width: 180px;
-      padding: 9px 14px;
-      border-radius: 8px;
-      border: 1px solid var(--success);
+    /* 習得ステータス表示（自動判定バッジ・誤操作防止のため手動クリック不可） */
+    .master-status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: #ffffff;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      font-weight: 700;
+      user-select: none;
+    }
+    .master-status-badge.is-learning {
+      background: #e0f2fe;
+      color: #0369a1;
+      border-color: #7dd3fc;
+    }
+    .master-status-badge.is-mastered {
       background: var(--success);
       color: #ffffff;
-      font-size: 0.84rem;
-      font-weight: 800;
-      cursor: pointer;
-    }
-    .test-finish-btn:hover {
-      opacity: 0.92;
+      border-color: var(--success);
     }
     .test-grade-Row {
       display: grid;
@@ -4740,14 +4749,14 @@ function renderStepsView(subj) {
       const isTesting = (appState.activeTestCardId === it.id);
       const srcClass = it.sourceType === "honsoku" ? "honsoku" : "kaisetsu";
 
-      let statusBtnClass = "master-btn";
-      let statusBtnText = "習得チェック";
+      let statusBadgeClass = "master-status-badge";
+      let statusBadgeText = "未習得";
       if (c.status === "learning") {
-        statusBtnClass = "master-btn is-learning";
-        statusBtnText = "● 進行中";
+        statusBadgeClass = "master-status-badge is-learning";
+        statusBadgeText = "● 進行中";
       } else if (c.status === "mastered") {
-        statusBtnClass = "master-btn is-mastered";
-        statusBtnText = "✓ 習得済み";
+        statusBadgeClass = "master-status-badge is-mastered";
+        statusBadgeText = "✓ 習得済み";
       }
 
       html += `
@@ -4761,9 +4770,9 @@ function renderStepsView(subj) {
             <h3 class="card-title">${escapeHtml(it.title)}</h3>
             <div class="card-ctrl-bar">
               <div class="card-ctrl-left">
-                <button type="button" class="${statusBtnClass}" data-toggle-master="${it.id}">
-                  <span>${statusBtnText}</span>
-                </button>
+                <span class="${statusBadgeClass}">
+                  <span>${statusBadgeText}</span>
+                </span>
               </div>
               <div class="card-ctrl-right">
                 <button type="button" class="card-act-btn" data-card-bulk="hide" data-card-id="${it.id}">隠す</button>
@@ -4777,7 +4786,13 @@ function renderStepsView(subj) {
 
           ${isTesting ? `
             <div class="test-guide-bar">
-              <span>🎯 テスト中：タップして確認 ➔ 間違えた穴埋めを黒塗りに戻して「完了」</span>
+              <div class="test-step-flow">
+                <span><span class="test-step-badge">1</span> 頭で思い出す</span>
+                <span class="test-step-arrow">➔</span>
+                <span><span class="test-step-badge">2</span> 開けて確認</span>
+                <span class="test-step-arrow">➔</span>
+                <span><span class="test-step-badge">3</span> <span class="test-step-focus">間違えた箇所は黒塗りに戻してから判定（4択）</span></span>
+              </div>
               <button type="button" class="card-act-btn" data-test-cancel="${it.id}">✕ 閉じる</button>
             </div>
           ` : ""}
@@ -4788,13 +4803,13 @@ function renderStepsView(subj) {
 
           ${isTesting ? `
             <div class="test-submit-bar">
-              <div class="test-main-btns">
+              <div class="test-action-top-row">
                 <button type="button" class="test-reveal-btn" data-test-reveal-all="${it.id}">
                   💡 すべて開けて答え合わせ
                 </button>
-                <button type="button" class="test-finish-btn" data-test-judge="${it.id}">
-                  ✅ 完了して復習登録（黒塗り＝ミスとして判定）
-                </button>
+                <span class="test-rule-hint">
+                  ※間違えた穴埋めを<strong>黒塗りに戻した状態で</strong>下の評価を押すと判定されます
+                </span>
               </div>
               ${renderGradeButtonsHtml(it.id, false)}
             </div>
@@ -5224,7 +5239,9 @@ function renderDueReviewView() {
         ${filterBtns}
       </div>
       <button type="button" class="sr-start-btn" id="btnStartDueSession" ${dueList.length === 0 ? "disabled" : ""}>
-        ${dueList.length > 0 ? `今日の復習を開始する（${dueList.length}件）` : "本日の復習は完了しています（各教科の「🎯 テスト」で登録されます）"}
+        ${dueList.length > 0 
+          ? `今日の復習を開始する（${dueList.length}件）` 
+          : `<span>本日の復習は完了しています</span><br><span style="font-size:0.75rem;font-weight:600;opacity:0.85;">（各教科の「🎯 テスト」で登録されます）</span>`}
       </button>
     </div>
 
