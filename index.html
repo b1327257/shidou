@@ -1077,24 +1077,57 @@
       grid-template-columns: repeat(4, 1fr);
       gap: 6px;
     }
+    @media (max-width: 480px) {
+      .test-grade-Row {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
     .grade-quick-btn {
-      padding: 6px 4px;
-      border-radius: 7px;
+      padding: 8px 6px;
+      border-radius: 8px;
       border: 1px solid var(--border);
       background: #ffffff;
-      font-size: 0.75rem;
-      font-weight: 700;
       cursor: pointer;
       text-align: center;
-      color: var(--text-sub);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+      transition: all 0.12s ease;
     }
     .grade-quick-btn:hover {
-      background: #f8fafc;
+      transform: translateY(-1px);
+      box-shadow: var(--shadow);
     }
-    .grade-quick-btn.g1 { color: var(--danger); border-color: var(--danger-border); }
-    .grade-quick-btn.g2 { color: #d97706; border-color: #fde68a; }
-    .grade-quick-btn.g3 { color: var(--primary); border-color: var(--primary-border); }
-    .grade-quick-btn.g4 { color: var(--success); border-color: var(--success-border); }
+    .grade-btn-main {
+      font-size: 0.8rem;
+      font-weight: 800;
+      line-height: 1.2;
+    }
+    .grade-btn-sub {
+      font-size: 0.68rem;
+      font-weight: 700;
+      opacity: 0.9;
+      line-height: 1.2;
+    }
+    .grade-btn-next {
+      font-size: 0.68rem;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 999px;
+      margin-top: 2px;
+      background: rgba(15, 23, 42, 0.05);
+      color: var(--text-sub);
+    }
+    .grade-quick-btn.g1 { color: var(--danger); border-color: var(--danger-border); background: #fff5f5; }
+    .grade-quick-btn.g1 .grade-btn-next { background: #fee2e2; color: #b91c1c; }
+    .grade-quick-btn.g2 { color: #b45309; border-color: #fde68a; background: #fffbeb; }
+    .grade-quick-btn.g2 .grade-btn-next { background: #fef3c7; color: #92400e; }
+    .grade-quick-btn.g3 { color: var(--primary); border-color: var(--primary-border); background: #eff6ff; }
+    .grade-quick-btn.g3 .grade-btn-next { background: #dbeafe; color: #1e40af; }
+    .grade-quick-btn.g4 { color: var(--success); border-color: var(--success-border); background: #ecfdf5; }
+    .grade-quick-btn.g4 .grade-btn-next { background: #d1fae5; color: #065f46; }
 
     /* 定着済み穴埋めの自動開示（虫食いフォーカス時） */
     .blank-chip.is-auto-open {
@@ -4233,7 +4266,7 @@ function calculateSchedule(card, grade, todayStr) {
     newRep = prevRep + 1;
   } else if (grade === 3) {
     newEF = prevEF;
-    if (prevRep === 0) newInterval = 1;
+    if (prevRep === 0) newInterval = 3;
     else if (prevRep === 1) {
       const baseGood = 6;
       newInterval = overdueDays > 0 ? Math.max(baseGood, Math.round((prevInterval + overdueDays * 0.5) * newEF)) : baseGood;
@@ -4633,6 +4666,35 @@ function renderStepNav(subj) {
 /* =========================================================
  * 体系学習ビュー（★タイトル横幅100%・カード別操作バー★）
  * ========================================================= */
+function renderGradeButtonsHtml(cardId, isDueSession = false) {
+  const c = getCardRecord(cardId, appState.activeSubject);
+  const todayStr = getLocalDateString();
+  const dueAttr = isDueSession ? ' data-is-due-session="true"' : '';
+
+  const defs = [
+    { g: 1, cls: "g1", main: "✕ もう一度", sub: "不正解・忘れた" },
+    { g: 2, cls: "g2", main: "△ 難しい", sub: "正解・ギリギリ" },
+    { g: 3, cls: "g3", main: "◯ 普通", sub: "正解・順調" },
+    { g: 4, cls: "g4", main: "◎ 簡単", sub: "正解・余裕" }
+  ];
+
+  return `<div class="test-grade-Row">` + defs.map((d) => {
+    const sim = calculateSchedule(c, d.g, todayStr);
+    let nextTxt = "";
+    if (d.g === 1) nextTxt = "今日再確認";
+    else if (sim.interval === 1) nextTxt = "次回: 明日";
+    else nextTxt = `次回: ${sim.interval}日後`;
+
+    return `
+      <button type="button" class="grade-quick-btn ${d.cls}" data-test-grade="${d.g}" data-card-id="${cardId}"${dueAttr}>
+        <span class="grade-btn-main">${d.main}</span>
+        <span class="grade-btn-sub">${d.sub}</span>
+        <span class="grade-btn-next">${nextTxt}</span>
+      </button>
+    `;
+  }).join("") + `</div>`;
+}
+
 function renderCardScheduleTag(cardId) {
   const c = appState.spacedCards[cardId];
   if (!c || !c.nextReviewDate) return "";
@@ -4734,12 +4796,7 @@ function renderStepsView(subj) {
                   ✅ 完了して復習登録（黒塗り＝ミスとして判定）
                 </button>
               </div>
-              <div class="test-grade-Row">
-                <button type="button" class="grade-quick-btn g1" data-test-grade="1" data-card-id="${it.id}">1.もう一度</button>
-                <button type="button" class="grade-quick-btn g2" data-test-grade="2" data-card-id="${it.id}">2.難しい</button>
-                <button type="button" class="grade-quick-btn g3" data-test-grade="3" data-card-id="${it.id}">3.普通</button>
-                <button type="button" class="grade-quick-btn g4" data-test-grade="4" data-card-id="${it.id}">4.簡単</button>
-              </div>
+              ${renderGradeButtonsHtml(it.id, false)}
             </div>
           ` : ""}
 
@@ -5106,7 +5163,13 @@ function renderDueReviewView() {
           </div>
 
           <div class="test-guide-bar">
-            <span>思い出してタップ ➔ 「すべて開けて答え合わせ」 ➔ ミスを黒塗りに戻して「完了」</span>
+            <div class="test-step-flow">
+              <span><span class="test-step-badge">1</span> 思い出す</span>
+              <span class="test-step-arrow">➔</span>
+              <span><span class="test-step-badge">2</span> 開けて確認</span>
+              <span class="test-step-arrow">➔</span>
+              <span><span class="test-step-badge">3</span> <span class="test-step-focus">間違えた箇所は黒塗りに戻す</span></span>
+            </div>
           </div>
 
           <div class="clause-box ${targetSubj.colorClass}-border">
@@ -5114,20 +5177,15 @@ function renderDueReviewView() {
           </div>
 
           <div class="test-submit-bar">
-            <div class="test-main-btns">
+            <div class="test-action-top-row">
               <button type="button" class="test-reveal-btn" data-test-reveal-all="${targetItem.id}">
                 💡 すべて開けて答え合わせ
               </button>
-              <button type="button" class="test-finish-btn" data-test-judge="${targetItem.id}" data-is-due-session="true">
-                ✅ 完了して次へ（黒塗り＝ミスとして判定）
-              </button>
+              <span class="test-rule-hint">
+                ※ミスを<strong>黒塗りに戻して</strong>下の評価を押すと自動集計＆登録
+              </span>
             </div>
-            <div class="test-grade-Row">
-              <button type="button" class="grade-quick-btn g1" data-test-grade="1" data-card-id="${targetItem.id}" data-is-due-session="true">1.もう一度</button>
-              <button type="button" class="grade-quick-btn g2" data-test-grade="2" data-card-id="${targetItem.id}" data-is-due-session="true">2.難しい</button>
-              <button type="button" class="grade-quick-btn g3" data-test-grade="3" data-card-id="${targetItem.id}" data-is-due-session="true">3.普通</button>
-              <button type="button" class="grade-quick-btn g4" data-test-grade="4" data-card-id="${targetItem.id}" data-is-due-session="true">4.簡単</button>
-            </div>
+            ${renderGradeButtonsHtml(targetItem.id, true)}
           </div>
 
           ${targetItem.note ? `<div class="point-wrap"><button type="button" class="point-toggle-btn" data-toggle-point="${targetItem.id}"><span>${appState.openPoints[targetItem.id] ? "▾ ポイント" : "▸ ポイント"}</span></button><div class="point-note ${appState.openPoints[targetItem.id] ? "is-open" : ""}">${targetItem.note.replace(/\n/g, "<br>")}</div></div>` : ""}
@@ -5448,14 +5506,15 @@ function setupEventListeners() {
       return;
     }
 
-    // 6. テスト内「✅ 完了して復習登録」
-    const judgeBtn = e.target.closest("[data-test-judge]");
-    if (judgeBtn) {
-      const cardId = judgeBtn.getAttribute("data-test-judge");
-      const isDueSession = Boolean(judgeBtn.getAttribute("data-is-due-session"));
-      const cardEl = judgeBtn.closest(".study-card");
+    // 4段階評価ボタン（★穴埋めの黒塗り正誤を自動集計してスケジュール登録を即時完了★）
+    const gradeBtn = e.target.closest("[data-test-grade]");
+    if (gradeBtn) {
+      const grade = Number(gradeBtn.getAttribute("data-test-grade"));
+      const cardId = gradeBtn.getAttribute("data-card-id");
+      const isDueSession = Boolean(gradeBtn.getAttribute("data-is-due-session"));
+      const cardEl = gradeBtn.closest(".study-card");
 
-      let wrongCount = 0;
+      // カード内の穴埋めの正誤を自動集計（開＝正解、黒塗り＝不正解）
       if (cardEl) {
         const c = getCardRecord(cardId, appState.activeSubject);
         if (!c.blankStats) c.blankStats = {};
@@ -5467,30 +5526,12 @@ function setupEventListeners() {
             if (isOpen) {
               c.blankStats[bid].correct++;
             } else {
-              wrongCount++;
               c.blankStats[bid].wrong++;
             }
           }
         });
       }
 
-      let grade = 3;
-      if (wrongCount > 0) {
-        grade = (wrongCount === 1) ? 2 : 1;
-      } else {
-        const c = getCardRecord(cardId, appState.activeSubject);
-        grade = (c.repetition >= 2 && c.efactor >= 2.5) ? 4 : 3;
-      }
-      applyCardReviewGrade(cardId, grade, isDueSession);
-      return;
-    }
-
-    // 7. 手動評価ボタン
-    const gradeBtn = e.target.closest("[data-test-grade]");
-    if (gradeBtn) {
-      const grade = Number(gradeBtn.getAttribute("data-test-grade"));
-      const cardId = gradeBtn.getAttribute("data-card-id");
-      const isDueSession = Boolean(gradeBtn.getAttribute("data-is-due-session"));
       applyCardReviewGrade(cardId, grade, isDueSession);
       return;
     }
