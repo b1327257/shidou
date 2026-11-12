@@ -4979,8 +4979,7 @@ function renderStepsView(subj) {
 
           ${isTesting ? `
             ${renderCardMiniCurveHtml(it.id)}
-            ${renderCardMiniCurveHtml(targetItem.id)}
-          <div class="test-submit-bar">
+            <div class="test-submit-bar">
               <div class="test-action-top-row">
                 <button type="button" class="test-reveal-btn" data-test-reveal-all="${it.id}">
                   💡 すべて開けて答え合わせ
@@ -5291,12 +5290,13 @@ function buildForgettingCurveSvgAndForecast(todayStr) {
       else stageCounts[3]++;
     });
 
+    const badgeOffsets = [0, 20, 14, 14];
     stages.forEach((st, idx) => {
       const px = x0 + (st.startDay / maxDays) * w;
       if (idx > 0) {
         svgInner += `<circle cx="${px.toFixed(1)}" cy="${y80}" r="3.5" fill="#d97706" stroke="#ffffff" stroke-width="1.2" />`;
       }
-      const badgeX = Math.min(x1 - 18, Math.max(x0 + 16, px + 14));
+      const badgeX = Math.min(x1 - 16, Math.max(x0 + 6, px + badgeOffsets[idx]));
       const countText = stageCounts[idx] + "枚";
       svgInner += `<rect x="${(badgeX - 15).toFixed(1)}" y="${yTop - 11}" width="30" height="14" rx="7" fill="#ffffff" stroke="#cbd5e1" stroke-width="1" />`;
       svgInner += `<text x="${badgeX.toFixed(1)}" y="${yTop - 1}" font-size="8.5" font-weight="800" fill="#0f172a" text-anchor="middle">${countText}</text>`;
@@ -5328,8 +5328,12 @@ function buildForgettingCurveSvgAndForecast(todayStr) {
     // モード2：デッキ全体の今後30日間の記憶減衰シミュレーション（放置した場合 vs 本日復習後の減衰）
     const sourceCards = activeCards.length > 0 ? activeCards : [{ interval: 2, nextReviewDate: todayStr, repetition: 0, efactor: 2.5 }];
 
+    const dueTargetCards = sourceCards.filter((c) => c.nextReviewDate && c.nextReviewDate <= todayStr);
+    const focusCards = dueTargetCards.length > 0 ? dueTargetCards : sourceCards;
+
     const withoutReviewPts = [];
     const withReviewPts = [];
+    const dueFocusBoostPts = [];
 
     for (let dayOffset = 0; dayOffset <= maxDays; dayOffset += 0.5) {
       let sumWithout = 0;
@@ -5340,30 +5344,44 @@ function buildForgettingCurveSvgAndForecast(todayStr) {
 
         if (c.nextReviewDate && c.nextReviewDate <= todayStr) {
           const nextSim = calculateSchedule(c, 3, todayStr);
-          const boostedS = Math.max(1.5, Number(nextSim.interval || 2));
+          const boostedS = Math.max(3.0, Number(nextSim.interval || 3));
           sumWith += calcPowerLawRetention(dayOffset, boostedS);
         } else {
           sumWith += calcPowerLawRetention(info.elapsed + dayOffset, info.s);
         }
       });
 
+      let sumFocusBoost = 0;
+      focusCards.forEach((c) => {
+        const nextSim = calculateSchedule(c, 3, todayStr);
+        const boostedS = Math.max(3.0, Number(nextSim.interval || 3));
+        sumFocusBoost += calcPowerLawRetention(dayOffset, boostedS);
+      });
+
       const avgWithout = sumWithout / sourceCards.length;
       const avgWith = sumWith / sourceCards.length;
+      const avgFocusBoost = sumFocusBoost / focusCards.length;
 
       const px = x0 + (dayOffset / maxDays) * w;
       const pyWithout = yBot - avgWithout * h;
       const pyWith = yBot - avgWith * h;
+      const pyFocus = yBot - avgFocusBoost * h;
 
       withoutReviewPts.push((dayOffset === 0 ? "M " : "L ") + px.toFixed(1) + " " + pyWithout.toFixed(1));
       withReviewPts.push((dayOffset === 0 ? "M " : "L ") + px.toFixed(1) + " " + pyWith.toFixed(1));
+      dueFocusBoostPts.push((dayOffset === 0 ? "M " : "L ") + px.toFixed(1) + " " + pyFocus.toFixed(1));
     }
 
     svgInner += `<path d="${withoutReviewPts.join(" ")}" fill="none" stroke="#f59e0b" stroke-width="2.3" stroke-linecap="round" />`;
     svgInner += `<path d="${withReviewPts.join(" ")}" fill="none" stroke="#16a34a" stroke-width="2.6" stroke-linecap="round" />`;
+    if (dueTargetCards.length > 0 && dueTargetCards.length < sourceCards.length) {
+      svgInner += `<path d="${dueFocusBoostPts.join(" ")}" fill="none" stroke="#0284c7" stroke-width="2.0" stroke-dasharray="4 3" stroke-linecap="round" />`;
+    }
 
     legendHtml = `
-      <span class="curve-legend-item"><span class="curve-line-swatch" style="background:#f59e0b;"></span>放置した場合の減衰</span>
-      <span class="curve-legend-item"><span class="curve-line-swatch" style="background:#16a34a;"></span>本日復習後の減衰</span>
+      <span class="curve-legend-item"><span class="curve-line-swatch" style="background:#f59e0b;"></span>放置時の全体減衰</span>
+      <span class="curve-legend-item"><span class="curve-line-swatch" style="background:#16a34a;"></span>復習後の全体減衰</span>
+      ${(dueTargetCards.length > 0 && dueTargetCards.length < sourceCards.length) ? '<span class="curve-legend-item"><span class="curve-line-swatch" style="background:#0284c7;"></span>本日対象カードの回復推移</span>' : ''}
       <span class="curve-legend-item"><span class="curve-line-swatch" style="background:#d97706;"></span>80%目標ライン</span>
     `;
   }
@@ -5455,6 +5473,7 @@ function renderDueReviewView() {
             ${targetItem.clauses.map((cl) => `<p>${renderTextWithBlanks(cl, targetItem.id)}</p>`).join("")}
           </div>
 
+          ${renderCardMiniCurveHtml(targetItem.id)}
           <div class="test-submit-bar">
             <div class="test-action-top-row">
               <button type="button" class="test-reveal-btn" data-test-reveal-all="${targetItem.id}">
