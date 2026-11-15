@@ -4481,6 +4481,20 @@ function getDueCards(todayStr, subjectFilter) {
     }
   });
   return list.sort((a, b) => {
+    // ★本日すでにテストして「もう一度（再テスト）」になったカードは、未実施カードの後ろ（一番末尾）に回す★
+    const aReviewedToday = Boolean(a.lastReviewedAt && getLocalDateString(new Date(a.lastReviewedAt)) === todayStr);
+    const bReviewedToday = Boolean(b.lastReviewedAt && getLocalDateString(new Date(b.lastReviewedAt)) === todayStr);
+
+    if (aReviewedToday !== bReviewedToday) {
+      return aReviewedToday ? 1 : -1;
+    }
+
+    // 両方とも本日再テスト待ちの場合は、テストした時刻が古い順（直前に再テストになったものが一番後ろ）
+    if (aReviewedToday && bReviewedToday) {
+      return (a.lastReviewedAt || "") < (b.lastReviewedAt || "") ? -1 : 1;
+    }
+
+    // 未実施カード同士は予定日が古い（期限超過）順 ➔ 間隔順
     if (a.nextReviewDate !== b.nextReviewDate) {
       return a.nextReviewDate < b.nextReviewDate ? -1 : 1;
     }
@@ -5626,7 +5640,7 @@ function applyCardReviewGrade(cardId, grade, isDueSession) {
   saveStateToDB();
 
   let nextLabel = "";
-  if (grade === 1) nextLabel = "本日再確認";
+  if (grade === 1) nextLabel = isDueSession ? "本日の復習の末尾へ回しました" : "本日再確認";
   else if (res.interval === 1) nextLabel = "次回: 明日";
   else nextLabel = `次回: ${res.interval}日後`;
 
@@ -5637,7 +5651,8 @@ function applyCardReviewGrade(cardId, grade, isDueSession) {
     const remaining = getDueCards(todayStr, appState.dueSubjectFilter);
     if (remaining.length === 0) {
       appState.dueSessionActive = false;
-    } else if (appState.dueIndex >= remaining.length) {
+    } else {
+      // 再テストカードは自動でremainingの末尾に移動するため、常に先頭(0番目)が次のカードになる
       appState.dueIndex = 0;
     }
     renderApp();
