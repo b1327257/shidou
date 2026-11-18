@@ -903,7 +903,7 @@
       gap: 6px;
     }
 
-    /* 分散復習タブのアクティブ状態＆バッジ */
+    /* 分散学習タブのアクティブ状態＆バッジ */
     .subj-tab.active-due {
       background: #0284c7;
       color: #ffffff;
@@ -1153,7 +1153,7 @@
     }
 
     /* =========================================================
-     * 🧠 分散復習タブ専用レイアウト（iPad & スマホ完全対応・歪みゼロ）
+     * 🧠 分散学習タブ専用レイアウト（iPad & スマホ完全対応・歪みゼロ）
      * ========================================================= */
     .sr-hero-card {
       background: #ffffff;
@@ -1368,7 +1368,7 @@
 
     <nav class="subject-bar" aria-label="教科選択">
       <button type="button" class="subj-tab" data-subject="overview" id="tabSubjOverview">📊 ダッシュボード</button>
-      <button type="button" class="subj-tab" data-subject="dueReview" id="tabSubjDueReview">🧠 分散復習 <span id="navDueBadge" class="due-count-badge" style="display:none;">0</span></button>
+      <button type="button" class="subj-tab" data-subject="dueReview" id="tabSubjDueReview">🧠 分散学習 <span id="navDueBadge" class="due-count-badge" style="display:none;">0</span></button>
       <button type="button" class="subj-tab" data-subject="music" id="tabSubjMusic">🎵 音楽</button>
       <button type="button" class="subj-tab" data-subject="art" id="tabSubjArt">🎨 図画工作</button>
       <button type="button" class="subj-tab" data-subject="math" id="tabSubjMath">📐 算数</button>
@@ -4224,6 +4224,9 @@ const appState = {
   dueQueue: [],
   dueIndex: 0,
   dueSubjectFilter: "all",
+  dueOrderMode: "shuffle",
+  shuffleOrderMap: {},
+  undoStack: [],
   curveViewMode: "sawtooth",
   quizStats: {},
   openPoints: {},
@@ -4324,6 +4327,8 @@ function calculateSchedule(card, grade, todayStr) {
   const prevRep = Number(card.repetition || 0);
   const prevInterval = Number(card.interval || 0);
   const prevEF = Number(card.efactor || 2.5);
+  const lapsedToday = Boolean(card.lapsedTodayDate && card.lapsedTodayDate === todayStr);
+  const savedPreLapseIv = Number(card.preLapseInterval || 0);
 
   let overdueDays = 0;
   if (card.nextReviewDate && todayStr && card.nextReviewDate < todayStr) {
@@ -4333,17 +4338,40 @@ function calculateSchedule(card, grade, todayStr) {
   let newRep = prevRep;
   let newInterval = 0;
   let newEF = prevEF;
+  let nextPreLapseIv = savedPreLapseIv;
+  let nextLapsedTodayDate = card.lapsedTodayDate || null;
 
   if (grade === 1) {
     newEF = Math.max(1.3, prevEF - 0.20);
+    // ★① 長期定着カード（間隔10日以上）が✕になった場合、元の間隔を記憶して完全ゼロ落ちを防ぐ
+    if (prevInterval >= 10) {
+      nextPreLapseIv = prevInterval;
+    }
+    nextLapsedTodayDate = todayStr;
     newRep = 0;
     newInterval = 0;
+  } else if (lapsedToday) {
+    // ★② 当日1度でも「✕ もう一度」を経由したカードの再テスト合格時：
+    // 数分前に見た直後のため「3日後・4日後」への水増しを防ぎ、基本は「明日(1日後)」に全黒塗りで再確認させる。
+    // ただし元々長期定着していたカード（savedPreLapseIv >= 10）は前回の25%〜30%（最低2日）へ部分リカバリーさせる。
+    if (grade === 2) newEF = Math.max(1.3, prevEF - 0.10);
+    else if (grade === 4) newEF = Math.min(3.0, prevEF + 0.05);
+
+    if (savedPreLapseIv >= 10) {
+      const ratio = (grade === 2) ? 0.20 : ((grade === 3) ? 0.25 : 0.30);
+      newInterval = Math.max(2, Math.round(savedPreLapseIv * ratio));
+    } else {
+      newInterval = 1; // 必ず明日（全黒塗り）でもう一度確認
+    }
+    newRep = 1;
+    nextPreLapseIv = 0;
   } else if (grade === 2) {
     newEF = Math.max(1.3, prevEF - 0.15);
     if (prevRep === 0) newInterval = 1;
     else if (prevRep === 1) newInterval = Math.max(3, prevInterval + 1);
     else newInterval = Math.max(prevInterval + 1, Math.round(prevInterval * 1.2));
     newRep = prevRep + 1;
+    nextPreLapseIv = 0;
   } else if (grade === 3) {
     newEF = prevEF;
     if (prevRep === 0) newInterval = 3;
@@ -4354,6 +4382,7 @@ function calculateSchedule(card, grade, todayStr) {
       newInterval = Math.max(prevInterval + 1, Math.round((prevInterval + overdueDays * 0.5) * newEF));
     }
     newRep = prevRep + 1;
+    nextPreLapseIv = 0;
   } else {
     newEF = Math.min(3.0, prevEF + 0.15);
     if (prevRep === 0) newInterval = 4;
@@ -4364,6 +4393,7 @@ function calculateSchedule(card, grade, todayStr) {
       newInterval = Math.max(prevInterval + 2, Math.round((prevInterval + overdueDays) * newEF * 1.3));
     }
     newRep = prevRep + 1;
+    nextPreLapseIv = 0;
   }
 
   newEF = Math.round(newEF * 100) / 100;
@@ -4376,7 +4406,9 @@ function calculateSchedule(card, grade, todayStr) {
     efactor: newEF,
     nextReviewDate: nextDate,
     lastScore: grade,
-    lastReviewedAt: new Date().toISOString()
+    lastReviewedAt: new Date().toISOString(),
+    preLapseInterval: nextPreLapseIv,
+    lapsedTodayDate: nextLapsedTodayDate
   };
 }
 
@@ -4623,7 +4655,19 @@ function getDueCards(todayStr, subjectFilter) {
       return (a.lastReviewedAt || "") < (b.lastReviewedAt || "") ? -1 : 1;
     }
 
-    // 未実施カード同士は予定日が古い（期限超過）順 ➔ 間隔順
+    // ★④ 未実施カード同士の並び順（6教科シャッフル / 定着度順 / 予定日順）
+    if (appState.dueOrderMode === "shuffle") {
+      if (appState.shuffleOrderMap[a.id] === undefined) appState.shuffleOrderMap[a.id] = Math.random();
+      if (appState.shuffleOrderMap[b.id] === undefined) appState.shuffleOrderMap[b.id] = Math.random();
+      return appState.shuffleOrderMap[a.id] - appState.shuffleOrderMap[b.id];
+    }
+    if (appState.dueOrderMode === "efAsc") {
+      const efA = Number(a.efactor || 2.5);
+      const efB = Number(b.efactor || 2.5);
+      if (efA !== efB) return efA - efB;
+      return (a.interval || 0) - (b.interval || 0);
+    }
+    // 予定日順
     if (a.nextReviewDate !== b.nextReviewDate) {
       return a.nextReviewDate < b.nextReviewDate ? -1 : 1;
     }
@@ -4787,12 +4831,16 @@ function isBlankAutoFocused(cardId, blankId) {
     return true;
   }
 
-  // 長期定着済みの虫食い自動調整（ONの場合）
+  // ★③ 長期定着済みの虫食い自動調整（ONの場合）：
+  // 累計だけでなく「直近連続2回以上正解していること（前回ミスした穴埋めは絶対に隠す）」を条件化
   if (!appState.adaptiveFocusEnabled) return false;
   if (!c.blankStats) return false;
   const bStat = c.blankStats[blankId];
-  if (bStat && bStat.correct >= 2 && (c.interval || 0) >= 6) {
-    return true;
+  if (bStat) {
+    const streak = (bStat.streak !== undefined) ? bStat.streak : (bStat.lastWrong ? 0 : bStat.correct);
+    if (streak >= 2 && !bStat.lastWrong && (c.interval || 0) >= 6) {
+      return true;
+    }
   }
   return false;
 }
@@ -5096,6 +5144,7 @@ function renderStepsView(subj) {
               <div class="card-ctrl-right">
                 <button type="button" class="card-act-btn" data-card-bulk="hide" data-card-id="${it.id}">隠す</button>
                 <button type="button" class="card-act-btn" data-card-bulk="show" data-card-id="${it.id}">表示</button>
+                ${(!isTesting && appState.undoStack.length > 0 && appState.undoStack[appState.undoStack.length - 1].cardId === it.id) ? `<button type="button" class="card-act-btn" id="btnUndoReviewGrade" title="直前の採点をやり直す">↩ やり直す</button>` : ""}
                 <button type="button" class="card-test-trigger ${isTesting ? "is-active" : ""}" data-card-test="${it.id}">
                   🎯 テスト
                 </button>
@@ -5335,7 +5384,7 @@ function renderOverviewDashboard() {
 }
 
 /* =========================================================
- * 🧠 分散復習タブ（忘却曲線・7日間予測・復習セッションを集約）
+ * 🧠 分散学習タブ（忘却曲線・7日間予測・復習セッションを集約）
  * ========================================================= */
 function buildForgettingCurveSvgAndForecast(todayStr) {
   const allCards = Object.values(appState.spacedCards);
@@ -5584,11 +5633,14 @@ function renderDueReviewView() {
     if (targetItem && targetSubj) {
       const srcClass = targetItem.sourceType === "honsoku" ? "honsoku" : "kaisetsu";
       return `
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
           <div style="font-size:0.9rem;font-weight:800;">
-            🧠 本日の分散復習（残り ${dueList.length} 枚）
+            🧠 本日の分散学習（残り ${dueList.length} 枚）
           </div>
-          <button type="button" class="ctrl-btn" id="btnExitDueSession">← 復習トップへ戻る</button>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <button type="button" class="ctrl-btn" id="btnUndoReviewGrade" ${appState.undoStack.length === 0 ? "disabled style='opacity:0.45;cursor:not-allowed;'" : ""} title="直前のカードの採点をやり直す">↩ 1つ前に戻る</button>
+            <button type="button" class="ctrl-btn" id="btnExitDueSession">← 復習トップへ戻る</button>
+          </div>
         </div>
 
         <article class="study-card testing-mode">
@@ -5635,7 +5687,7 @@ function renderDueReviewView() {
     }
   }
 
-  // 分散復習トップ画面（ヒーローカード ＋ 忘却曲線＆7日間予測の2カラム）
+  // 分散学習トップ画面（ヒーローカード ＋ 忘却曲線＆7日間予測の2カラム）
   const curve = buildForgettingCurveSvgAndForecast(todayStr);
 
   const subjs = [
@@ -5655,14 +5707,23 @@ function renderDueReviewView() {
 
   return `
     <div class="sr-hero-card">
-      <div style="font-size:0.8rem;font-weight:800;color:var(--primary);margin-bottom:4px;">本日の分散復習スケジュール（SM-2）</div>
+      <div style="font-size:0.8rem;font-weight:800;color:var(--primary);margin-bottom:4px;">本日の分散学習スケジュール（SM-2）</div>
       <div class="sr-hero-count">${dueList.length}<span>件</span></div>
       <div style="display:flex;justify-content:center;gap:10px;font-size:0.8rem;color:var(--text-sub);margin-bottom:12px;">
         <span>本日予定：<strong>${todayExactCount}件</strong></span>
         <span>期限超過：<strong style="color:var(--danger);">${overdueCount}件</strong></span>
       </div>
-      <div style="display:flex;justify-content:center;gap:6px;flex-wrap:wrap;margin-bottom:14px;">
+      <div style="display:flex;justify-content:center;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
         ${filterBtns}
+      </div>
+      <div style="display:flex;justify-content:center;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:14px;">
+        <span style="font-size:0.75rem;font-weight:700;color:var(--text-sub);">出題順：</span>
+        <div class="curve-mode-group">
+          <button type="button" class="curve-mode-btn ${appState.dueOrderMode === "shuffle" ? "active" : ""}" data-due-order="shuffle">6教科シャッフル</button>
+          <button type="button" class="curve-mode-btn ${appState.dueOrderMode === "efAsc" ? "active" : ""}" data-due-order="efAsc">苦手・定着度順</button>
+          <button type="button" class="curve-mode-btn ${appState.dueOrderMode === "dueAsc" ? "active" : ""}" data-due-order="dueAsc">予定日順</button>
+        </div>
+        ${appState.undoStack.length > 0 ? `<button type="button" class="ctrl-btn" id="btnUndoReviewGrade" style="font-size:0.72rem;padding:3px 9px;">↩ 直前の採点をやり直す</button>` : ""}
       </div>
       <button type="button" class="sr-start-btn" id="btnStartDueSession" ${dueList.length === 0 ? "disabled" : ""}>
         ${dueList.length > 0 
@@ -5757,6 +5818,8 @@ function applyCardReviewGrade(cardId, grade, isDueSession) {
   c.nextReviewDate = res.nextReviewDate;
   c.lastScore = res.lastScore;
   c.lastReviewedAt = res.lastReviewedAt;
+  c.preLapseInterval = res.preLapseInterval;
+  c.lapsedTodayDate = res.lapsedTodayDate;
 
   c.reviewHistory.push({
     date: todayStr,
@@ -5990,6 +6053,25 @@ function setupEventListeners() {
       const isDueSession = Boolean(gradeBtn.getAttribute("data-is-due-session"));
       const cardEl = gradeBtn.closest(".study-card");
 
+      // ★④ 採点直前の状態をUndoスタックに退避（押し間違いのやり直し用）
+      const prevCardRef = getCardRecord(cardId, appState.activeSubject);
+      const blanksSnap = {};
+      if (cardEl) {
+        cardEl.querySelectorAll(".blank-chip").forEach((b) => {
+          const bid = b.getAttribute("data-blank-id");
+          if (bid) blanksSnap[bid] = Boolean(appState.blanks[bid]);
+        });
+      }
+      appState.undoStack.push({
+        cardId: cardId,
+        cardSnapshot: JSON.parse(JSON.stringify(prevCardRef)),
+        masterySnapshot: Boolean(appState.mastery[cardId]),
+        blanksSnapshot: blanksSnap,
+        testCardBlanksSnapshot: JSON.parse(JSON.stringify(appState.testCardBlanks)),
+        isDueSession: isDueSession
+      });
+      if (appState.undoStack.length > 15) appState.undoStack.shift();
+
       // カード内の穴埋めの正誤を自動集計（開＝正解、黒塗り＝不正解）＆ 当日内の正解状態を保持
       if (cardEl) {
         const c = getCardRecord(cardId, appState.activeSubject);
@@ -6008,16 +6090,20 @@ function setupEventListeners() {
           if (bid) {
             allBids.push(bid);
             const isOpen = Boolean(appState.testCardBlanks[bid]);
-            if (!c.blankStats[bid]) c.blankStats[bid] = { correct: 0, wrong: 0 };
+            if (!c.blankStats[bid]) c.blankStats[bid] = { correct: 0, wrong: 0, streak: 0, lastWrong: false };
             if (isOpen) {
               openCnt++;
               c.blankStats[bid].correct++;
+              c.blankStats[bid].streak = (c.blankStats[bid].streak || 0) + 1;
+              c.blankStats[bid].lastWrong = false;
               c.todayPassedBlanks[bid] = true;
               // 通常画面でも正解したものは表示のままにし、間違えたものに集中できるようにする
               appState.blanks[bid] = true;
             } else {
               anyWrong = true;
               c.blankStats[bid].wrong++;
+              c.blankStats[bid].streak = 0;
+              c.blankStats[bid].lastWrong = true;
               c.todayPassedBlanks[bid] = false;
               appState.blanks[bid] = false;
             }
@@ -6049,7 +6135,7 @@ function setupEventListeners() {
         c.status = "learning";
         appState.mastery[itemId] = false;
         if (!c.nextReviewDate) c.nextReviewDate = getLocalDateString();
-        showToast("「● 進行中」に設定しました（本日の分散復習に追加）");
+        showToast("「● 進行中」に設定しました（本日の分散学習に追加）");
       } else if (c.status === "learning") {
         c.status = "mastered";
         appState.mastery[itemId] = true;
@@ -6092,12 +6178,53 @@ function setupEventListeners() {
       return;
     }
 
-    // 11. 分散復習セッション開始・終了・フィルタ
+    // 11. 分散学習セッション開始・終了・フィルタ
     if (e.target.closest("#btnStartDueSession")) {
+      // セッション開始時にシャッフルマップを更新
+      appState.shuffleOrderMap = {};
+      Object.keys(appState.spacedCards).forEach((cid) => {
+        appState.shuffleOrderMap[cid] = Math.random();
+      });
       appState.dueSessionActive = true;
       appState.dueIndex = 0;
       appState.testCardBlanks = {};
       renderApp();
+      return;
+    }
+    const orderBtn = e.target.closest("[data-due-order]");
+    if (orderBtn) {
+      appState.dueOrderMode = orderBtn.getAttribute("data-due-order") || "shuffle";
+      if (appState.dueOrderMode === "shuffle") {
+        appState.shuffleOrderMap = {};
+        Object.keys(appState.spacedCards).forEach((cid) => {
+          appState.shuffleOrderMap[cid] = Math.random();
+        });
+      }
+      saveStateToDB();
+      renderApp();
+      return;
+    }
+    if (e.target.closest("#btnUndoReviewGrade")) {
+      if (appState.undoStack.length === 0) return;
+      const last = appState.undoStack.pop();
+      appState.spacedCards[last.cardId] = last.cardSnapshot;
+      appState.mastery[last.cardId] = last.masterySnapshot;
+      Object.keys(last.blanksSnapshot).forEach((bid) => {
+        appState.blanks[bid] = last.blanksSnapshot[bid];
+      });
+      appState.testCardBlanks = last.testCardBlanksSnapshot || {};
+      if (last.isDueSession) {
+        appState.activeSubject = "dueReview";
+        appState.dueSessionActive = true;
+        // やり直すカードを先頭に表示させるため shuffleOrderMap で最小値をセット
+        appState.shuffleOrderMap[last.cardId] = -1;
+        appState.dueIndex = 0;
+      } else {
+        appState.activeTestCardId = last.cardId;
+      }
+      saveStateToDB();
+      renderApp();
+      showToast("直前の採点を取り消して元に戻しました");
       return;
     }
     if (e.target.closest("#btnExitDueSession")) {
