@@ -1176,6 +1176,84 @@
       color: var(--text-sub);
       margin-left: 4px;
     }
+    .sr-start-row {
+      display: flex;
+      justify-content: center;
+      align-items: stretch;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .sr-start-row .sr-start-btn {
+      flex: 1 1 190px;
+      max-width: 260px;
+    }
+    .sr-start-btn.secondary {
+      background: var(--card);
+      color: var(--primary);
+      border: 1.5px solid var(--primary-border);
+      box-shadow: none;
+    }
+    .sr-start-btn.secondary:hover:not(:disabled) {
+      background: var(--primary-light);
+    }
+    .sr-spread-bar {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin: 0 auto 12px;
+      padding: 6px 10px;
+      background: var(--danger-bg);
+      border: 1px solid var(--danger-border);
+      border-radius: 10px;
+      font-size: 0.76rem;
+      color: var(--danger);
+      font-weight: 700;
+    }
+    .sr-spread-btn {
+      padding: 4px 10px;
+      border-radius: 7px;
+      border: 1px solid var(--danger-border);
+      background: #fff;
+      color: var(--danger);
+      font-size: 0.74rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .sr-spread-btn:hover {
+      background: #fee2e2;
+    }
+    .sr-checkpoint-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px 20px;
+      text-align: center;
+      box-shadow: var(--shadow);
+    }
+    .sr-checkpoint-title {
+      font-size: 1.25rem;
+      font-weight: 800;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+    .sr-checkpoint-sub {
+      font-size: 0.85rem;
+      color: var(--text-sub);
+      margin-bottom: 18px;
+    }
+    .pinpoint-tag {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      background: var(--success-bg);
+      color: var(--success);
+      border: 1px solid var(--success-border);
+    }
     .sr-start-btn {
       width: 100%;
       max-width: 400px;
@@ -4211,16 +4289,21 @@ const appState = {
   activeStepId: "all",
   showOnlyUnmastered: false,
   adaptiveFocusEnabled: true,
+  burySiblingsEnabled: true,
   quizFilter: "all",
   quizIndex: 0,
   quizAnswered: false,
   quizSelectedOpt: null,
   blanks: {},
   mastery: {}, // 後方互換用
-  spacedCards: {}, // [cardId]: { id, subject, status, repetition, interval, efactor, nextReviewDate, lastReviewedAt, lastScore, blankStats }
+  spacedCards: {}, // [cardId]: { id, subject, status, repetition, interval, efactor, nextReviewDate, lastReviewedAt, lastScore, blankStats, pinpointPassedBlanks }
   activeTestCardId: null,
   testCardBlanks: {},
+  testCardAutoBlanks: {},
   dueSessionActive: false,
+  dueBatchLimit: 0,
+  dueBatchDone: 0,
+  dueBatchCheckpoint: false,
   dueQueue: [],
   dueIndex: 0,
   dueSubjectFilter: "all",
@@ -4235,6 +4318,8 @@ const appState = {
 
 // 連番マップ構築（元の仕様どおり：各教科の体系学習とマトリクスでそれぞれ1から連番）
 const BLANK_SEQ_MAP = {};
+const CARD_STEP_MAP = {};
+const CARD_BLANKS_MAP = {};
 function buildBlankSeqMap() {
   const re = /\{\{([a-zA-Z0-9_]+)\|([^}]+)\}\}/g;
   Object.keys(SUBJECT_DATA).forEach((sKey) => {
@@ -4242,14 +4327,20 @@ function buildBlankSeqMap() {
     let stepCounter = 1;
     subj.steps.forEach((st) => {
       st.items.forEach((it) => {
+        CARD_STEP_MAP[it.id] = st.stepId;
+        const cardBlankIds = [];
         it.clauses.forEach((c) => {
           let m;
           while ((m = re.exec(c)) !== null) {
             if (!BLANK_SEQ_MAP[m[1]]) {
               BLANK_SEQ_MAP[m[1]] = stepCounter++;
             }
+            if (cardBlankIds.indexOf(m[1]) === -1) {
+              cardBlankIds.push(m[1]);
+            }
           }
         });
+        CARD_BLANKS_MAP[it.id] = cardBlankIds;
       });
     });
     let matrixCounter = 1;
@@ -4323,7 +4414,7 @@ function getCardRecord(cardId, subjectKey, title) {
   return appState.spacedCards[cardId];
 }
 
-function calculateSchedule(card, grade, todayStr) {
+function calculateSchedule(card, grade, todayStr, applyFuzz = false) {
   const prevRep = Number(card.repetition || 0);
   const prevInterval = Number(card.interval || 0);
   const prevEF = Number(card.efactor || 2.5);
@@ -4397,6 +4488,11 @@ function calculateSchedule(card, grade, todayStr) {
   }
 
   newEF = Math.round(newEF * 100) / 100;
+  if (applyFuzz && grade >= 2 && newInterval >= 3) {
+    const fuzzRange = Math.min(7, Math.max(1, Math.round(newInterval * 0.10)));
+    const fuzzOffset = Math.floor(Math.random() * (fuzzRange * 2 + 1)) - fuzzRange;
+    newInterval = Math.max(2, newInterval + fuzzOffset);
+  }
   if (newInterval > 365) newInterval = 365;
 
   const nextDate = (grade === 1) ? todayStr : addDaysToDateString(todayStr, newInterval);
@@ -4712,6 +4808,7 @@ function getPersistPayload() {
     activeStepId: appState.activeStepId,
     showOnlyUnmastered: appState.showOnlyUnmastered,
     adaptiveFocusEnabled: appState.adaptiveFocusEnabled,
+    burySiblingsEnabled: appState.burySiblingsEnabled,
     quizFilter: appState.quizFilter,
     blanks: appState.blanks,
     mastery: appState.mastery,
@@ -4768,6 +4865,7 @@ async function loadStateFromDB() {
     if (loaded.activeStepId) appState.activeStepId = loaded.activeStepId;
     if (typeof loaded.showOnlyUnmastered === "boolean") appState.showOnlyUnmastered = loaded.showOnlyUnmastered;
     if (typeof loaded.adaptiveFocusEnabled === "boolean") appState.adaptiveFocusEnabled = loaded.adaptiveFocusEnabled;
+    if (typeof loaded.burySiblingsEnabled === "boolean") appState.burySiblingsEnabled = loaded.burySiblingsEnabled;
     if (loaded.quizFilter) appState.quizFilter = loaded.quizFilter;
     if (loaded.blanks && typeof loaded.blanks === "object") appState.blanks = loaded.blanks;
     if (loaded.mastery && typeof loaded.mastery === "object") appState.mastery = loaded.mastery;
@@ -4780,7 +4878,7 @@ async function loadStateFromDB() {
   const isNewDay = Boolean(prevDate && prevDate !== todayStr);
   appState.lastActiveDate = todayStr;
 
-  // 全教科カードのレコード保証 ＆ 日付変更時（翌AM4:00以降）の全黒塗りリセット
+  // 全教科カードのレコード保証（日付変更時の強制黒塗りリセットは行わず、ユーザーの開閉・ピンポイント状態を維持）
   Object.keys(SUBJECT_DATA).forEach((sKey) => {
     const subj = SUBJECT_DATA[sKey];
     subj.steps.forEach((st) => {
@@ -4790,16 +4888,6 @@ async function loadStateFromDB() {
         rec.title = it.title;
         if (appState.mastery[it.id] && rec.status === "unlearned") {
           rec.status = "mastered";
-        }
-        // 日付が変わっていたら、当日正解キャッシュをクリアし、そのカードの穴埋めを全黒塗りに戻す
-        if (isNewDay || (rec.todayPassedDate && rec.todayPassedDate !== todayStr)) {
-          if (rec.todayPassedBlanks) {
-            Object.keys(rec.todayPassedBlanks).forEach((bid) => {
-              appState.blanks[bid] = false;
-            });
-          }
-          rec.todayPassedDate = null;
-          rec.todayPassedBlanks = {};
         }
       });
     });
@@ -4824,48 +4912,67 @@ function escapeHtml(str) {
 function isBlankAutoFocused(cardId, blankId) {
   const c = appState.spacedCards[cardId];
   if (!c) return false;
-  const todayStr = getLocalDateString();
 
-  // ★当日内（AM4:00区切り）の再テスト時：今日すでに正解した穴埋めは表示したままにし、間違えたものだけ黒塗りで出題★
-  if (c.todayPassedDate === todayStr && c.todayPassedBlanks && c.todayPassedBlanks[blankId]) {
+  // 1. 前回一部ミスしたカードのピンポイント復習：前回正解済みだった空欄を緑開示し、苦手空欄だけ黒塗り（日をまたいでも維持）
+  if (c.pinpointPassedBlanks && c.pinpointPassedBlanks[blankId]) {
     return true;
   }
 
-  // ★③ 長期定着済みの虫食い自動調整（ONの場合）：
-  // 累計だけでなく「直近連続2回以上正解していること（前回ミスした穴埋めは絶対に隠す）」を条件化
+  // 2. 自動穴埋め調整（ONの場合）：2回連続正解済み（前回ミスなし）の空欄を自動緑開示
   if (!appState.adaptiveFocusEnabled) return false;
   if (!c.blankStats) return false;
   const bStat = c.blankStats[blankId];
   if (bStat) {
     const streak = (bStat.streak !== undefined) ? bStat.streak : (bStat.lastWrong ? 0 : bStat.correct);
-    if (streak >= 2 && !bStat.lastWrong && (c.interval || 0) >= 6) {
+    if (streak >= 2 && !bStat.lastWrong) {
       return true;
     }
   }
   return false;
 }
 
+function initTestCardBlanks(cardId) {
+  appState.testCardBlanks = {};
+  appState.testCardAutoBlanks = {};
+  const bids = CARD_BLANKS_MAP[cardId] || [];
+  let autoCount = 0;
+  bids.forEach((bid) => {
+    const isAuto = isBlankAutoFocused(cardId, bid);
+    appState.testCardBlanks[bid] = isAuto;
+    appState.testCardAutoBlanks[bid] = isAuto;
+    if (isAuto) autoCount++;
+  });
+  // 安全弁：全空欄が自動緑開示になってしまう場合はテストにならないため全黒塗りに戻す
+  if (bids.length > 0 && autoCount === bids.length) {
+    bids.forEach((bid) => {
+      appState.testCardBlanks[bid] = false;
+      appState.testCardAutoBlanks[bid] = false;
+    });
+  }
+}
+
 function renderTextWithBlanks(rawText, activeTestCardId = null) {
   const escaped = escapeHtml(rawText).replace(/\n/g, "<br>");
+  const isTesting = Boolean(activeTestCardId);
+  if (isTesting && Object.keys(appState.testCardBlanks).length === 0) {
+    initTestCardBlanks(activeTestCardId);
+  }
   return escaped.replace(/\{\{([a-zA-Z0-9_]+)\|([^}]+)\}\}/g, (_, blankId, answerText) => {
     const seqNum = BLANK_SEQ_MAP[blankId] || "";
-    const isTesting = Boolean(activeTestCardId);
 
     let isRevealed = false;
     let isAutoOpen = false;
 
     if (isTesting) {
       if (appState.testCardBlanks[blankId] !== undefined) {
-        isRevealed = appState.testCardBlanks[blankId];
+        isRevealed = Boolean(appState.testCardBlanks[blankId]);
+        isAutoOpen = Boolean(isRevealed && appState.testCardAutoBlanks[blankId]);
       } else {
-        if (isBlankAutoFocused(activeTestCardId, blankId)) {
-          isRevealed = true;
-          isAutoOpen = true;
-          appState.testCardBlanks[blankId] = true;
-        } else {
-          isRevealed = false;
-          appState.testCardBlanks[blankId] = false;
-        }
+        const auto = isBlankAutoFocused(activeTestCardId, blankId);
+        isRevealed = auto;
+        isAutoOpen = auto;
+        appState.testCardBlanks[blankId] = auto;
+        appState.testCardAutoBlanks[blankId] = auto;
       }
     } else {
       isRevealed = Boolean(appState.blanks[blankId]);
@@ -5133,6 +5240,7 @@ function renderStepsView(subj) {
               <span class="source-tag ${srcClass}">${escapeHtml(it.sourceLabel)}</span>
               ${it.examBadge ? `<span class="exam-badge">${escapeHtml(it.examBadge)}</span>` : ""}
               ${renderCardScheduleTag(it.id)}
+              ${(c.pinpointPassedBlanks && Object.keys(c.pinpointPassedBlanks).length > 0) ? `<span class="pinpoint-tag">苦手ピンポイント</span>` : ""}
             </div>
             <h3 class="card-title">${escapeHtml(it.title)}</h3>
             <div class="card-ctrl-bar">
@@ -5155,13 +5263,16 @@ function renderStepsView(subj) {
           ${isTesting ? `
             <div class="test-guide-bar">
               <div class="test-step-flow">
-                <span><span class="test-step-badge">1</span> 頭で思い出す</span>
+                <span><span class="test-step-badge">1</span> 思い出す</span>
                 <span class="test-step-arrow">➔</span>
                 <span><span class="test-step-badge">2</span> 開けて確認</span>
                 <span class="test-step-arrow">➔</span>
-                <span><span class="test-step-badge">3</span> <span class="test-step-focus">間違えた箇所は黒塗りに戻してから判定（4択）</span></span>
+                <span><span class="test-step-badge">3</span> <span class="test-step-focus">間違えた箇所は黒塗りに戻して判定</span></span>
               </div>
-              <button type="button" class="card-act-btn" data-test-cancel="${it.id}">✕ 閉じる</button>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <button type="button" class="card-act-btn" data-test-reset-blanks="${it.id}">全黒塗り</button>
+                <button type="button" class="card-act-btn" data-test-cancel="${it.id}">✕ 閉じる</button>
+              </div>
             </div>
           ` : ""}
 
@@ -5610,6 +5721,23 @@ function renderDueReviewView() {
   const overdueCount = dueAll.filter((c) => c.nextReviewDate < todayStr).length;
   const todayExactCount = dueAll.length - overdueCount;
 
+  // まず5問チェックポイント画面
+  if (appState.dueSessionActive && appState.dueBatchCheckpoint) {
+    return `
+      <div class="sr-checkpoint-card">
+        <div class="sr-checkpoint-title">🎉 ${appState.dueBatchDone}問 完了！</div>
+        <div class="sr-checkpoint-sub">
+          ${dueList.length > 0 ? `残りの復習はあと <strong>${dueList.length}件</strong> です。` : `本日の復習はすべて完了しました。`}
+        </div>
+        <div class="sr-start-row">
+          ${dueList.length > 0 ? `<button type="button" class="sr-start-btn" id="btnContinueDueQuick5">もう5問やる</button>` : ""}
+          <button type="button" class="sr-start-btn secondary" id="btnExitDueSession">ここで終える</button>
+        </div>
+        ${appState.undoStack.length > 0 ? `<div style="margin-top:12px;"><button type="button" class="ctrl-btn" id="btnUndoReviewGrade">↩ 1つ前に戻る</button></div>` : ""}
+      </div>
+    `;
+  }
+
   // 復習セッション実行中の場合
   if (appState.dueSessionActive && dueList.length > 0) {
     if (appState.dueIndex >= dueList.length) {
@@ -5635,7 +5763,7 @@ function renderDueReviewView() {
       return `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
           <div style="font-size:0.9rem;font-weight:800;">
-            🧠 本日の分散学習（残り ${dueList.length} 枚）
+            🧠 本日の分散学習（${appState.dueBatchLimit > 0 ? `セット ${appState.dueBatchDone + 1}/${appState.dueBatchLimit}・` : ""}残り ${dueList.length} 枚）
           </div>
           <div style="display:flex;align-items:center;gap:6px;">
             <button type="button" class="ctrl-btn" id="btnUndoReviewGrade" ${appState.undoStack.length === 0 ? "disabled style='opacity:0.45;cursor:not-allowed;'" : ""} title="直前のカードの採点をやり直す">↩ 1つ前に戻る</button>
@@ -5650,6 +5778,7 @@ function renderDueReviewView() {
               <span class="source-tag ${srcClass}">${escapeHtml(targetItem.sourceLabel)}</span>
               ${targetItem.examBadge ? `<span class="exam-badge">${escapeHtml(targetItem.examBadge)}</span>` : ""}
               ${renderCardScheduleTag(targetItem.id)}
+              ${(currentCard.pinpointPassedBlanks && Object.keys(currentCard.pinpointPassedBlanks).length > 0) ? `<span class="pinpoint-tag">苦手ピンポイント</span>` : ""}
             </div>
             <h3 class="card-title">${escapeHtml(targetItem.title)}</h3>
           </div>
@@ -5662,6 +5791,7 @@ function renderDueReviewView() {
               <span class="test-step-arrow">➔</span>
               <span><span class="test-step-badge">3</span> <span class="test-step-focus">間違えた箇所は黒塗りに戻す</span></span>
             </div>
+            <button type="button" class="card-act-btn" data-test-reset-blanks="${targetItem.id}">全黒塗り</button>
           </div>
 
           <div class="clause-box ${targetSubj.colorClass}-border">
@@ -5709,10 +5839,17 @@ function renderDueReviewView() {
     <div class="sr-hero-card">
       <div style="font-size:0.8rem;font-weight:800;color:var(--primary);margin-bottom:4px;">本日の分散学習スケジュール（SM-2）</div>
       <div class="sr-hero-count">${dueList.length}<span>件</span></div>
-      <div style="display:flex;justify-content:center;gap:10px;font-size:0.8rem;color:var(--text-sub);margin-bottom:12px;">
+      <div style="display:flex;justify-content:center;gap:10px;font-size:0.8rem;color:var(--text-sub);margin-bottom:10px;">
         <span>本日予定：<strong>${todayExactCount}件</strong></span>
         <span>期限超過：<strong style="color:var(--danger);">${overdueCount}件</strong></span>
       </div>
+      ${overdueCount >= 3 ? `
+        <div class="sr-spread-bar">
+          <span>期限超過 ${overdueCount}件をならす：</span>
+          <button type="button" class="sr-spread-btn" data-spread-days="3">3日に分散</button>
+          <button type="button" class="sr-spread-btn" data-spread-days="5">5日に分散</button>
+        </div>
+      ` : ""}
       <div style="display:flex;justify-content:center;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
         ${filterBtns}
       </div>
@@ -5723,13 +5860,19 @@ function renderDueReviewView() {
           <button type="button" class="curve-mode-btn ${appState.dueOrderMode === "efAsc" ? "active" : ""}" data-due-order="efAsc">苦手・定着度順</button>
           <button type="button" class="curve-mode-btn ${appState.dueOrderMode === "dueAsc" ? "active" : ""}" data-due-order="dueAsc">予定日順</button>
         </div>
-        ${appState.undoStack.length > 0 ? `<button type="button" class="ctrl-btn" id="btnUndoReviewGrade" style="font-size:0.72rem;padding:3px 9px;">↩ 直前の採点をやり直す</button>` : ""}
+        <button type="button" class="ctrl-btn ${appState.burySiblingsEnabled ? "active-filter" : ""}" id="btnToggleBurySiblings" style="font-size:0.72rem;padding:4px 9px;">同STEP兄弟回避: ${appState.burySiblingsEnabled ? "ON" : "OFF"}</button>
+        ${appState.undoStack.length > 0 ? `<button type="button" class="ctrl-btn" id="btnUndoReviewGrade" style="font-size:0.72rem;padding:4px 9px;">↩ 直前を戻す</button>` : ""}
       </div>
-      <button type="button" class="sr-start-btn" id="btnStartDueSession" ${dueList.length === 0 ? "disabled" : ""}>
-        ${dueList.length > 0 
-          ? `今日の復習を開始する（${dueList.length}件）` 
-          : `<span>本日の復習は完了しています</span><br><span style="font-size:0.75rem;font-weight:600;opacity:0.85;">（各教科の「🎯 テスト」で登録されます）</span>`}
-      </button>
+      <div class="sr-start-row">
+        ${dueList.length > 5 ? `
+          <button type="button" class="sr-start-btn" id="btnStartDueQuick5">まず5問だけ始める</button>
+          <button type="button" class="sr-start-btn secondary" id="btnStartDueSession">すべて復習する（${dueList.length}件）</button>
+        ` : `
+          <button type="button" class="sr-start-btn" id="btnStartDueSession" ${dueList.length === 0 ? "disabled" : ""}>
+            ${dueList.length > 0 ? `今日の復習を開始する（${dueList.length}件）` : `本日の復習は完了しています`}
+          </button>
+        `}
+      </div>
     </div>
 
     <div class="sr-two-col-grid">
@@ -5763,11 +5906,11 @@ function renderDueReviewView() {
         <div class="sr-forecast-grid">
           ${curve.forecastHtml}
         </div>
-        <div style="margin-top:14px;padding:10px 12px;background:#f8fafc;border-radius:8px;border:1px solid var(--border);font-size:0.78rem;color:var(--text-sub);line-height:1.6;">
-          <strong style="color:var(--text);">💡 自己採点の基準 ＆ 分散学習の流れ</strong><br>
-          1. <strong>一言一句の暗唱は不要</strong>：核となる語・意味合いが合っていれば開示のまま<strong>△ / ◯ / ◎</strong>で進めます。<br>
-          2. <strong>抜け・取り違えは黒塗りへ</strong>：1箇所でも意味が出ない・対立語と取り違えた空欄は<strong>黒塗りに戻して「✕ もう一度」</strong>を選択します（当日中はその空欄だけ集中再テスト）。<br>
-          3. 日付の切り替えは<strong>毎日 AM4:00</strong> です（翌日になると再び全穴埋めが黒塗りで出題されます）。
+        <div style="margin-top:14px;display:flex;flex-wrap:wrap;gap:6px;font-size:0.74rem;color:var(--text-sub);">
+          <span class="next-due-tag">自動緑開示: ${appState.adaptiveFocusEnabled ? "ON（2連続正解）" : "OFF"}</span>
+          <span class="next-due-tag">同STEP兄弟回避: ${appState.burySiblingsEnabled ? "ON" : "OFF"}</span>
+          <span class="next-due-tag">間隔ゆらぎ: ON（±10%）</span>
+          <span class="next-due-tag">空欄状態: 自動黒塗りなし</span>
         </div>
       </div>
     </div>
@@ -5807,7 +5950,7 @@ function renderApp() {
 function applyCardReviewGrade(cardId, grade, isDueSession) {
   const c = getCardRecord(cardId, appState.activeSubject);
   const todayStr = getLocalDateString();
-  const res = calculateSchedule(c, grade, todayStr);
+  const res = calculateSchedule(c, grade, todayStr, true);
 
   if (!Array.isArray(c.reviewHistory)) c.reviewHistory = [];
   if (!c.firstLearnedDate) c.firstLearnedDate = todayStr;
@@ -5843,6 +5986,30 @@ function applyCardReviewGrade(cardId, grade, isDueSession) {
     appState.mastery[cardId] = false;
   }
 
+  // 同STEPの兄弟カードを翌日へずらす（Bury Siblings）
+  const buriedSiblings = [];
+  if (grade >= 2 && appState.burySiblingsEnabled) {
+    const myStepId = CARD_STEP_MAP[cardId];
+    if (myStepId) {
+      const tomorrowStr = addDaysToDateString(todayStr, 1);
+      Object.keys(appState.spacedCards).forEach((otherId) => {
+        if (otherId === cardId) return;
+        if (CARD_STEP_MAP[otherId] !== myStepId) return;
+        const other = appState.spacedCards[otherId];
+        if (!other || !other.nextReviewDate || other.nextReviewDate > todayStr) return;
+        const reviewedToday = Boolean(other.lastReviewedAt && getLocalDateString(new Date(other.lastReviewedAt)) === todayStr);
+        if (reviewedToday) return;
+        buriedSiblings.push({ cardId: otherId, prevNextReviewDate: other.nextReviewDate });
+        other.nextReviewDate = tomorrowStr;
+      });
+    }
+  }
+  if (appState.undoStack.length > 0 && appState.undoStack[appState.undoStack.length - 1].cardId === cardId) {
+    appState.undoStack[appState.undoStack.length - 1].buriedSiblings = buriedSiblings;
+    appState.undoStack[appState.undoStack.length - 1].prevDueBatchDone = appState.dueBatchDone;
+    appState.undoStack[appState.undoStack.length - 1].prevDueBatchCheckpoint = appState.dueBatchCheckpoint;
+  }
+
   saveStateToDB();
 
   let nextLabel = "";
@@ -5850,13 +6017,27 @@ function applyCardReviewGrade(cardId, grade, isDueSession) {
   else if (res.interval === 1) nextLabel = "次回: 明日";
   else nextLabel = `次回: ${res.interval}日後`;
 
-  showToast(`復習登録完了（${nextLabel}）`);
+  const buryNote = buriedSiblings.length > 0 ? `｜同STEP兄弟 ${buriedSiblings.length}枚を明日へ` : "";
+  showToast(`復習登録完了（${nextLabel}${buryNote}）`);
 
   if (isDueSession) {
     appState.testCardBlanks = {};
+    appState.testCardAutoBlanks = {};
+    if (grade >= 2 && appState.dueBatchLimit > 0) {
+      appState.dueBatchDone++;
+    }
     const remaining = getDueCards(todayStr, appState.dueSubjectFilter);
     if (remaining.length === 0) {
-      appState.dueSessionActive = false;
+      if (appState.dueBatchLimit > 0 && appState.dueBatchDone > 0) {
+        appState.dueBatchCheckpoint = true;
+      } else {
+        appState.dueSessionActive = false;
+        appState.dueBatchLimit = 0;
+        appState.dueBatchDone = 0;
+        appState.dueBatchCheckpoint = false;
+      }
+    } else if (appState.dueBatchLimit > 0 && appState.dueBatchDone >= appState.dueBatchLimit) {
+      appState.dueBatchCheckpoint = true;
     } else {
       // 再テストカードは自動でremainingの末尾に移動するため、常に先頭(0番目)が次のカードになる
       appState.dueIndex = 0;
@@ -5865,6 +6046,7 @@ function applyCardReviewGrade(cardId, grade, isDueSession) {
   } else {
     appState.activeTestCardId = null;
     appState.testCardBlanks = {};
+    appState.testCardAutoBlanks = {};
     renderApp();
   }
 }
@@ -5881,7 +6063,11 @@ function setupEventListeners() {
       appState.activeStepId = "all";
       appState.activeTestCardId = null;
       appState.testCardBlanks = {};
+      appState.testCardAutoBlanks = {};
       appState.dueSessionActive = false;
+      appState.dueBatchLimit = 0;
+      appState.dueBatchDone = 0;
+      appState.dueBatchCheckpoint = false;
       appState.quizIndex = 0;
       appState.quizAnswered = false;
       saveStateToDB();
@@ -5933,8 +6119,10 @@ function setupEventListeners() {
 
   document.getElementById("btnToggleAdaptiveFocus").addEventListener("click", () => {
     appState.adaptiveFocusEnabled = !appState.adaptiveFocusEnabled;
+    appState.testCardBlanks = {};
+    appState.testCardAutoBlanks = {};
     saveStateToDB();
-    updateHeaderAndTabs();
+    renderApp();
     showToast(`自動穴埋め調整を ${appState.adaptiveFocusEnabled ? "ON" : "OFF"} にしました`);
   });
 
@@ -5958,6 +6146,7 @@ function setupEventListeners() {
       if (testCardId) {
         const nextState = !Boolean(appState.testCardBlanks[blankId]);
         appState.testCardBlanks[blankId] = nextState;
+        appState.testCardAutoBlanks[blankId] = false;
         chip.classList.toggle("is-open", nextState);
         chip.classList.toggle("is-hidden", !nextState);
         chip.classList.remove("is-auto-open");
@@ -5998,21 +6187,10 @@ function setupEventListeners() {
         appState.activeTestCardId = null;
         appState.testCardBlanks = {};
       } else {
-        const c = getCardRecord(cardId, appState.activeSubject);
-        const todayStr = getLocalDateString();
-        // 日付が変わっていたら（AM4:00以降）、当日正解キャッシュをクリアして全黒塗り出題にする
-        if (c.todayPassedDate !== todayStr) {
-          c.todayPassedDate = todayStr;
-          c.todayPassedBlanks = {};
-        } else if (c.todayPassedBlanks) {
-          // 当日内に全問正解済みで再度「🎯 テスト」を手動で押した場合は、全問再テストできるようリセット
-          const vals = Object.values(c.todayPassedBlanks);
-          if (vals.length > 0 && vals.every(Boolean)) {
-            c.todayPassedBlanks = {};
-          }
-        }
+        getCardRecord(cardId, appState.activeSubject);
         appState.activeTestCardId = cardId;
         appState.testCardBlanks = {};
+        appState.testCardAutoBlanks = {};
       }
       renderApp();
       return;
@@ -6023,7 +6201,24 @@ function setupEventListeners() {
     if (cancelBtn) {
       appState.activeTestCardId = null;
       appState.testCardBlanks = {};
+      appState.testCardAutoBlanks = {};
       renderApp();
+      return;
+    }
+
+    // 4b. テスト内「全黒塗り」（緑開示を解除して全空欄をテスト）
+    const resetBlanksBtn = e.target.closest("[data-test-reset-blanks]");
+    if (resetBlanksBtn) {
+      const cardId = resetBlanksBtn.getAttribute("data-test-reset-blanks");
+      const bids = CARD_BLANKS_MAP[cardId] || [];
+      appState.testCardBlanks = {};
+      appState.testCardAutoBlanks = {};
+      bids.forEach((bid) => {
+        appState.testCardBlanks[bid] = false;
+        appState.testCardAutoBlanks[bid] = false;
+      });
+      renderApp();
+      showToast("全空欄を黒塗りに戻しました");
       return;
     }
 
@@ -6036,8 +6231,14 @@ function setupEventListeners() {
           const bid = b.getAttribute("data-blank-id");
           if (bid) {
             appState.testCardBlanks[bid] = true;
-            b.classList.remove("is-hidden", "is-auto-open");
-            b.classList.add("is-open");
+            b.classList.remove("is-hidden");
+            if (appState.testCardAutoBlanks[bid]) {
+              b.classList.add("is-auto-open");
+              b.classList.remove("is-open");
+            } else {
+              b.classList.add("is-open");
+              b.classList.remove("is-auto-open");
+            }
           }
         });
       }
@@ -6068,56 +6269,61 @@ function setupEventListeners() {
         masterySnapshot: Boolean(appState.mastery[cardId]),
         blanksSnapshot: blanksSnap,
         testCardBlanksSnapshot: JSON.parse(JSON.stringify(appState.testCardBlanks)),
+        testCardAutoBlanksSnapshot: JSON.parse(JSON.stringify(appState.testCardAutoBlanks)),
         isDueSession: isDueSession
       });
       if (appState.undoStack.length > 15) appState.undoStack.shift();
 
-      // カード内の穴埋めの正誤を自動集計（開＝正解、黒塗り＝不正解）＆ 当日内の正解状態を保持
+      // カード内の穴埋めの正誤を自動集計（開＝正解、黒塗り＝不正解）＆ 苦手空欄のピンポイント持ち越し
       if (cardEl) {
         const c = getCardRecord(cardId, appState.activeSubject);
-        const todayStr = getLocalDateString();
         if (!c.blankStats) c.blankStats = {};
-        if (c.todayPassedDate !== todayStr || !c.todayPassedBlanks) {
-          c.todayPassedDate = todayStr;
-          c.todayPassedBlanks = {};
-        }
 
         let anyWrong = false;
         let openCnt = 0;
         const allBids = [];
+        const passedThisRun = {};
         cardEl.querySelectorAll(".blank-chip").forEach((b) => {
           const bid = b.getAttribute("data-blank-id");
           if (bid) {
             allBids.push(bid);
             const isOpen = Boolean(appState.testCardBlanks[bid]);
+            const wasAutoOpen = Boolean(appState.testCardAutoBlanks[bid]);
             if (!c.blankStats[bid]) c.blankStats[bid] = { correct: 0, wrong: 0, streak: 0, lastWrong: false };
             if (isOpen) {
               openCnt++;
-              c.blankStats[bid].correct++;
-              c.blankStats[bid].streak = (c.blankStats[bid].streak || 0) + 1;
-              c.blankStats[bid].lastWrong = false;
-              c.todayPassedBlanks[bid] = true;
-              // 通常画面でも正解したものは表示のままにし、間違えたものに集中できるようにする
+              if (!wasAutoOpen) {
+                c.blankStats[bid].correct++;
+                c.blankStats[bid].streak = (c.blankStats[bid].streak || 0) + 1;
+                c.blankStats[bid].lastWrong = false;
+              }
+              passedThisRun[bid] = true;
               appState.blanks[bid] = true;
             } else {
               anyWrong = true;
               c.blankStats[bid].wrong++;
               c.blankStats[bid].streak = 0;
               c.blankStats[bid].lastWrong = true;
-              c.todayPassedBlanks[bid] = false;
               appState.blanks[bid] = false;
             }
           }
         });
 
         c.lastBlankAccuracy = allBids.length > 0 ? (openCnt / allBids.length) : 1.0;
-        // もし黒塗りに戻さず全て開けた状態で「✕ もう一度(grade=1)」を押した場合は、全箇所を再テスト対象（黒塗り）にする
+
         if (grade === 1 && !anyWrong) {
+          // すべて開けたまま「✕ もう一度」を押した場合は全箇所を再テスト対象（黒塗り）にする
           c.lastBlankAccuracy = 0.0;
-          c.todayPassedBlanks = {};
+          c.pinpointPassedBlanks = {};
           allBids.forEach((bid) => {
             appState.blanks[bid] = false;
           });
+        } else if (anyWrong) {
+          // 一部ミスした空欄がある場合、正解済み空欄を次回テストまで緑開示で保持（日をまたいでも維持）
+          c.pinpointPassedBlanks = passedThisRun;
+        } else {
+          // 全空欄クリア時はピンポイント持ち越しを解除（以降は2連続正解による自動緑開示で管理）
+          c.pinpointPassedBlanks = {};
         }
       }
 
@@ -6178,17 +6384,72 @@ function setupEventListeners() {
       return;
     }
 
-    // 11. 分散学習セッション開始・終了・フィルタ
-    if (e.target.closest("#btnStartDueSession")) {
-      // セッション開始時にシャッフルマップを更新
+    // 11. 分散学習セッション開始・終了・フィルタ・自動ならし・兄弟回避
+    if (e.target.closest("#btnStartDueQuick5")) {
       appState.shuffleOrderMap = {};
       Object.keys(appState.spacedCards).forEach((cid) => {
         appState.shuffleOrderMap[cid] = Math.random();
       });
       appState.dueSessionActive = true;
+      appState.dueBatchLimit = 5;
+      appState.dueBatchDone = 0;
+      appState.dueBatchCheckpoint = false;
       appState.dueIndex = 0;
       appState.testCardBlanks = {};
+      appState.testCardAutoBlanks = {};
       renderApp();
+      return;
+    }
+    if (e.target.closest("#btnContinueDueQuick5")) {
+      appState.dueBatchLimit = 5;
+      appState.dueBatchDone = 0;
+      appState.dueBatchCheckpoint = false;
+      appState.dueIndex = 0;
+      appState.testCardBlanks = {};
+      appState.testCardAutoBlanks = {};
+      renderApp();
+      return;
+    }
+    if (e.target.closest("#btnStartDueSession")) {
+      appState.shuffleOrderMap = {};
+      Object.keys(appState.spacedCards).forEach((cid) => {
+        appState.shuffleOrderMap[cid] = Math.random();
+      });
+      appState.dueSessionActive = true;
+      appState.dueBatchLimit = 0;
+      appState.dueBatchDone = 0;
+      appState.dueBatchCheckpoint = false;
+      appState.dueIndex = 0;
+      appState.testCardBlanks = {};
+      appState.testCardAutoBlanks = {};
+      renderApp();
+      return;
+    }
+    const spreadBtn = e.target.closest("[data-spread-days]");
+    if (spreadBtn) {
+      const days = Math.max(2, Number(spreadBtn.getAttribute("data-spread-days") || 3));
+      const todayStr = getLocalDateString();
+      const overdue = Object.values(appState.spacedCards)
+        .filter((c) => c.nextReviewDate && c.nextReviewDate < todayStr)
+        .sort((a, b) => {
+          const efDiff = Number(a.efactor || 2.5) - Number(b.efactor || 2.5);
+          if (efDiff !== 0) return efDiff;
+          return Number(a.interval || 0) - Number(b.interval || 0);
+        });
+      overdue.forEach((c, idx) => {
+        const offset = Math.floor((idx * days) / overdue.length);
+        c.nextReviewDate = addDaysToDateString(todayStr, offset);
+      });
+      saveStateToDB();
+      renderApp();
+      showToast(`期限超過 ${overdue.length}件を今日から${days}日間に分散しました`);
+      return;
+    }
+    if (e.target.closest("#btnToggleBurySiblings")) {
+      appState.burySiblingsEnabled = !appState.burySiblingsEnabled;
+      saveStateToDB();
+      renderApp();
+      showToast(`同STEP兄弟回避を ${appState.burySiblingsEnabled ? "ON" : "OFF"} にしました`);
       return;
     }
     const orderBtn = e.target.closest("[data-due-order]");
@@ -6212,11 +6473,21 @@ function setupEventListeners() {
       Object.keys(last.blanksSnapshot).forEach((bid) => {
         appState.blanks[bid] = last.blanksSnapshot[bid];
       });
+      if (Array.isArray(last.buriedSiblings)) {
+        last.buriedSiblings.forEach((b) => {
+          if (appState.spacedCards[b.cardId]) {
+            appState.spacedCards[b.cardId].nextReviewDate = b.prevNextReviewDate;
+          }
+        });
+      }
       appState.testCardBlanks = last.testCardBlanksSnapshot || {};
+      appState.testCardAutoBlanks = last.testCardAutoBlanksSnapshot || {};
+      if (typeof last.prevDueBatchDone === "number") appState.dueBatchDone = last.prevDueBatchDone;
+      if (typeof last.prevDueBatchCheckpoint === "boolean") appState.dueBatchCheckpoint = last.prevDueBatchCheckpoint;
       if (last.isDueSession) {
         appState.activeSubject = "dueReview";
         appState.dueSessionActive = true;
-        // やり直すカードを先頭に表示させるため shuffleOrderMap で最小値をセット
+        appState.dueBatchCheckpoint = false;
         appState.shuffleOrderMap[last.cardId] = -1;
         appState.dueIndex = 0;
       } else {
@@ -6229,7 +6500,11 @@ function setupEventListeners() {
     }
     if (e.target.closest("#btnExitDueSession")) {
       appState.dueSessionActive = false;
+      appState.dueBatchLimit = 0;
+      appState.dueBatchDone = 0;
+      appState.dueBatchCheckpoint = false;
       appState.testCardBlanks = {};
+      appState.testCardAutoBlanks = {};
       renderApp();
       return;
     }
@@ -6404,6 +6679,8 @@ function setupEventListeners() {
           if (parsed.quizStats && typeof parsed.quizStats === "object") appState.quizStats = parsed.quizStats;
           if (parsed.activeSubject) appState.activeSubject = parsed.activeSubject;
           if (parsed.activeMode) appState.activeMode = parsed.activeMode;
+          if (typeof parsed.adaptiveFocusEnabled === "boolean") appState.adaptiveFocusEnabled = parsed.adaptiveFocusEnabled;
+          if (typeof parsed.burySiblingsEnabled === "boolean") appState.burySiblingsEnabled = parsed.burySiblingsEnabled;
           await saveStateToDB();
           await loadStateFromDB();
           renderApp();
