@@ -1216,6 +1216,57 @@
       border-color: var(--primary-border);
       color: var(--primary-dark);
     }
+    .sr-schedule-bars {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      margin: 0 auto 12px;
+    }
+    .sr-schedule-bars .sr-spread-bar {
+      margin: 0;
+    }
+    .sr-pull-bar {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      padding: 6px 10px;
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-radius: 10px;
+      font-size: 0.76rem;
+      color: #166534;
+      font-weight: 700;
+    }
+    .sr-pull-btn {
+      padding: 3px 9px;
+      border-radius: 6px;
+      border: 1px solid #86efac;
+      background: #ffffff;
+      color: #166534;
+      font-size: 0.74rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+    .sr-pull-btn:hover {
+      background: #dcfce7;
+    }
+    .sr-undo-sched-btn {
+      padding: 3px 9px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #ffffff;
+      color: var(--text-sub);
+      font-size: 0.74rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .sr-undo-sched-btn:hover {
+      background: #f1f5f9;
+    }
     .sr-spread-btn {
       padding: 4px 10px;
       border-radius: 7px;
@@ -1275,16 +1326,18 @@
     }
     .point-note-editor {
       width: 100%;
-      min-height: 76px;
+      min-height: 88px;
+      box-sizing: border-box;
       border: 1px solid #fcd34d;
       border-radius: 6px;
       background: #ffffff;
       color: var(--text);
       font-family: inherit;
-      font-size: 0.84rem;
-      line-height: 1.6;
-      padding: 8px 10px;
-      resize: vertical;
+      font-size: 0.9rem;
+      line-height: 1.65;
+      padding: 10px 12px;
+      resize: none;
+      overflow-y: hidden;
       display: block;
     }
     .point-note-editor:focus {
@@ -4348,6 +4401,7 @@ const appState = {
   dueOrderMode: "shuffle",
   shuffleOrderMap: {},
   undoStack: [],
+  scheduleUndoSnapshot: null,
   curveViewMode: "sawtooth",
   quizStats: {},
   openPoints: {},
@@ -4963,6 +5017,19 @@ function renderUserPointBoxHtml(itemId) {
       <textarea class="point-note-editor" data-note-input="${itemId}" placeholder="調べたことや覚え方のメモを記入（自動保存）">${escapeHtml(txt)}</textarea>
     </div>
   </div>`;
+}
+
+function autoResizePointTextarea(ta) {
+  if (!ta) return;
+  ta.style.height = "auto";
+  const nextH = Math.max(88, ta.scrollHeight + 4);
+  ta.style.height = nextH + "px";
+}
+
+function resizeAllOpenPointTextareas() {
+  document.querySelectorAll(".point-note.is-open .point-note-editor").forEach((ta) => {
+    autoResizePointTextarea(ta);
+  });
 }
 
 function isBlankAutoFocused(cardId, blankId) {
@@ -5769,10 +5836,20 @@ function buildForgettingCurveSvgAndForecast(todayStr) {
 
 function renderDueReviewView() {
   const todayStr = getLocalDateString();
+  const tomorrowStr = addDaysToDateString(todayStr, 1);
+  const day2Str = addDaysToDateString(todayStr, 2);
   const dueList = getDueCards(todayStr, appState.dueSubjectFilter);
   const dueAll = getDueCards(todayStr, "all");
   const overdueCount = dueAll.filter((c) => c.nextReviewDate < todayStr).length;
   const todayExactCount = dueAll.length - overdueCount;
+  const allScheduled = Object.values(appState.spacedCards).filter((c) => c && c.nextReviewDate);
+  const futureCards = allScheduled.filter((c) => c.nextReviewDate > todayStr);
+  const tomorrowCount = futureCards.filter((c) => c.nextReviewDate === tomorrowStr).length;
+  const day2Count = futureCards.filter((c) => c.nextReviewDate === day2Str).length;
+  const near3Counts = [dueAll.length, tomorrowCount, day2Count];
+  const near3Max = Math.max(...near3Counts);
+  const near3Min = Math.min(...near3Counts);
+  const hasNearSkew = near3Max >= 8 && (near3Max - near3Min) >= 4;
 
   // まず5問チェックポイント画面
   if (appState.dueSessionActive && appState.dueBatchCheckpoint) {
@@ -5896,19 +5973,35 @@ function renderDueReviewView() {
         <span>本日予定：<strong>${todayExactCount}件</strong></span>
         <span>期限超過：<strong style="color:var(--danger);">${overdueCount}件</strong></span>
       </div>
-      ${overdueCount >= 2 ? `
-        <div class="sr-spread-bar">
-          <span>期限超過 ${overdueCount}件を分散：</span>
-          <button type="button" class="sr-spread-btn" data-spread-days="3" data-spread-scope="overdue">3日に分散</button>
-          <button type="button" class="sr-spread-btn" data-spread-days="5" data-spread-scope="overdue">5日に分散</button>
-        </div>
-      ` : (dueAll.length >= 6 ? `
-        <div class="sr-spread-bar is-info">
-          <span>溜まった復習 ${dueAll.length}件を分散：</span>
-          <button type="button" class="sr-spread-btn" data-spread-days="3" data-spread-scope="due">3日に分散</button>
-          <button type="button" class="sr-spread-btn" data-spread-days="5" data-spread-scope="due">5日に分散</button>
-        </div>
-      ` : "")}
+      <div class="sr-schedule-bars">
+        ${overdueCount >= 2 ? `
+          <div class="sr-spread-bar">
+            <span>期限超過 ${overdueCount}件を含めて均等化：</span>
+            <button type="button" class="sr-spread-btn" data-spread-days="3">3日均等</button>
+            <button type="button" class="sr-spread-btn" data-spread-days="5">5日均等</button>
+          </div>
+        ` : ((dueAll.length >= 6 || hasNearSkew) ? `
+          <div class="sr-spread-bar is-info">
+            <span>${hasNearSkew && dueAll.length < 6 ? `直近の偏り（最大${near3Max}件）を均等化：` : `直近の復習を均等化：`}</span>
+            <button type="button" class="sr-spread-btn" data-spread-days="3">3日均等</button>
+            <button type="button" class="sr-spread-btn" data-spread-days="5">5日均等</button>
+          </div>
+        ` : "")}
+        ${futureCards.length > 0 ? `
+          <div class="sr-pull-bar">
+            <span>先取り${tomorrowCount > 0 ? `（明日 ${tomorrowCount}件）` : `（翌日以降 ${futureCards.length}件）`}：</span>
+            ${futureCards.length >= 3 ? `<button type="button" class="sr-pull-btn" data-pull-count="3">+3件</button>` : `<button type="button" class="sr-pull-btn" data-pull-count="${futureCards.length}">+${futureCards.length}件</button>`}
+            ${futureCards.length >= 5 ? `<button type="button" class="sr-pull-btn" data-pull-count="5">+5件</button>` : ""}
+            ${tomorrowCount > 0 && tomorrowCount !== 3 && tomorrowCount !== 5 ? `<button type="button" class="sr-pull-btn" data-pull-tomorrow="1">明日分すべて(${tomorrowCount}件)</button>` : ""}
+            ${appState.scheduleUndoSnapshot ? `<button type="button" class="sr-undo-sched-btn" id="btnUndoSchedule">↩ 元に戻す</button>` : ""}
+          </div>
+        ` : (appState.scheduleUndoSnapshot ? `
+          <div class="sr-pull-bar">
+            <span>直前の予定変更を戻す：</span>
+            <button type="button" class="sr-undo-sched-btn" id="btnUndoSchedule">↩ 元に戻す</button>
+          </div>
+        ` : "")}
+      </div>
       <div style="display:flex;justify-content:center;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
         ${filterBtns}
       </div>
@@ -5988,6 +6081,7 @@ function renderApp() {
   }
   if (appState.activeSubject === "dueReview") {
     area.innerHTML = renderDueReviewView();
+    requestAnimationFrame(resizeAllOpenPointTextareas);
     return;
   }
 
@@ -6001,6 +6095,7 @@ function renderApp() {
   } else {
     area.innerHTML = renderQuizView();
   }
+  requestAnimationFrame(resizeAllOpenPointTextareas);
 }
 
 /* =========================================================
@@ -6426,7 +6521,14 @@ function setupEventListeners() {
         pointBtn.innerHTML = `<span>${nextOpen ? "▾" : "▸"} ${hasNote ? "メモあり" : "ポイント（未記入）"}</span>`;
         if (nextOpen) {
           const ta = wrap.querySelector(".point-note-editor");
-          if (ta) setTimeout(() => ta.focus(), 40);
+          if (ta) {
+            autoResizePointTextarea(ta);
+            requestAnimationFrame(() => autoResizePointTextarea(ta));
+            setTimeout(() => {
+              autoResizePointTextarea(ta);
+              ta.focus();
+            }, 40);
+          }
         }
       }
       return;
@@ -6487,22 +6589,94 @@ function setupEventListeners() {
     const spreadBtn = e.target.closest("[data-spread-days]");
     if (spreadBtn) {
       const days = Math.max(2, Number(spreadBtn.getAttribute("data-spread-days") || 3));
-      const scope = spreadBtn.getAttribute("data-spread-scope") || "overdue";
       const todayStr = getLocalDateString();
+      const horizonStr = addDaysToDateString(todayStr, days - 1);
       const targets = Object.values(appState.spacedCards)
-        .filter((c) => c.nextReviewDate && (scope === "due" ? c.nextReviewDate <= todayStr : c.nextReviewDate < todayStr))
+        .filter((c) => c && c.nextReviewDate && c.nextReviewDate <= horizonStr)
         .sort((a, b) => {
+          const aOver = a.nextReviewDate < todayStr ? 0 : 1;
+          const bOver = b.nextReviewDate < todayStr ? 0 : 1;
+          if (aOver !== bOver) return aOver - bOver;
+          const efDiff = Number(a.efactor || 2.5) - Number(b.efactor || 2.5);
+          if (efDiff !== 0) return efDiff;
+          const ivDiff = Number(a.interval || 0) - Number(b.interval || 0);
+          if (ivDiff !== 0) return ivDiff;
+          return String(a.nextReviewDate).localeCompare(String(b.nextReviewDate));
+        });
+      if (targets.length === 0) {
+        showToast("均等化対象の復習カードはありません");
+        return;
+      }
+      // Snapshot for 1-tap undo
+      const snap = {};
+      Object.entries(appState.spacedCards).forEach(([k, v]) => {
+        if (v && v.nextReviewDate) snap[k] = v.nextReviewDate;
+      });
+      appState.scheduleUndoSnapshot = snap;
+
+      const base = Math.floor(targets.length / days);
+      const rem = targets.length % days;
+      const dayCounts = [];
+      let cursor = 0;
+      for (let d = 0; d < days; d++) {
+        const cap = base + (d < rem ? 1 : 0);
+        const dateStr = addDaysToDateString(todayStr, d);
+        for (let k = 0; k < cap && cursor < targets.length; k++, cursor++) {
+          targets[cursor].nextReviewDate = dateStr;
+        }
+        dayCounts.push(cap);
+      }
+      saveStateToDB();
+      renderApp();
+      showToast(`直近${days}日間を均等化しました（${dayCounts.map((n, i) => (i === 0 ? "今日" : i === 1 ? "明日" : `${i}日後`) + n + "件").join("・")}）`);
+      return;
+    }
+
+    const pullBtn = e.target.closest("[data-pull-count], [data-pull-tomorrow]");
+    if (pullBtn) {
+      const todayStr = getLocalDateString();
+      const tomorrowStr = addDaysToDateString(todayStr, 1);
+      const isTomorrowAll = pullBtn.hasAttribute("data-pull-tomorrow");
+      const reqCount = Number(pullBtn.getAttribute("data-pull-count") || 0);
+      const futureSorted = Object.values(appState.spacedCards)
+        .filter((c) => c && c.nextReviewDate && (isTomorrowAll ? c.nextReviewDate === tomorrowStr : c.nextReviewDate > todayStr))
+        .sort((a, b) => {
+          const dDiff = String(a.nextReviewDate).localeCompare(String(b.nextReviewDate));
+          if (dDiff !== 0) return dDiff;
           const efDiff = Number(a.efactor || 2.5) - Number(b.efactor || 2.5);
           if (efDiff !== 0) return efDiff;
           return Number(a.interval || 0) - Number(b.interval || 0);
         });
-      targets.forEach((c, idx) => {
-        const offset = Math.floor((idx * days) / targets.length);
-        c.nextReviewDate = addDaysToDateString(todayStr, offset);
+      const picked = isTomorrowAll ? futureSorted : futureSorted.slice(0, Math.max(1, reqCount));
+      if (picked.length === 0) {
+        showToast("先取りできる翌日以降の予定はありません");
+        return;
+      }
+      const snap = {};
+      Object.entries(appState.spacedCards).forEach(([k, v]) => {
+        if (v && v.nextReviewDate) snap[k] = v.nextReviewDate;
+      });
+      appState.scheduleUndoSnapshot = snap;
+      picked.forEach((c) => {
+        c.nextReviewDate = todayStr;
       });
       saveStateToDB();
       renderApp();
-      showToast(`${targets.length}件の復習を今日から${days}日間に分散しました`);
+      showToast(`${isTomorrowAll ? "明日分" : "翌日以降"}から ${picked.length}件 を今日に先取りしました`);
+      return;
+    }
+
+    if (e.target.closest("#btnUndoSchedule")) {
+      const snap = appState.scheduleUndoSnapshot;
+      if (snap) {
+        Object.entries(snap).forEach(([k, dt]) => {
+          if (appState.spacedCards[k]) appState.spacedCards[k].nextReviewDate = dt;
+        });
+        appState.scheduleUndoSnapshot = null;
+        saveStateToDB();
+        renderApp();
+        showToast("直前の予定変更を元に戻しました");
+      }
       return;
     }
     if (e.target.closest("#btnToggleBurySiblings")) {
@@ -6640,6 +6814,7 @@ function setupEventListeners() {
   document.getElementById("appContentArea").addEventListener("input", (e) => {
     const ta = e.target.closest("[data-note-input]");
     if (!ta) return;
+    autoResizePointTextarea(ta);
     const itemId = ta.getAttribute("data-note-input");
     if (!itemId) return;
     if (!appState.userNotes) appState.userNotes = {};
@@ -6662,6 +6837,7 @@ function setupEventListeners() {
     if (noteSaveTimer) clearTimeout(noteSaveTimer);
     noteSaveTimer = setTimeout(() => saveStateToDB(), 300);
   });
+  window.addEventListener("resize", () => requestAnimationFrame(resizeAllOpenPointTextareas));
 
   // ★データ管理モーダル（元の正常なID・クラスで100%動作保証）★
   const modal = document.getElementById("dataModal");
