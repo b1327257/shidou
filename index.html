@@ -1211,18 +1211,23 @@
       color: var(--danger);
       font-weight: 700;
     }
+    .sr-spread-bar.is-info {
+      background: var(--primary-light);
+      border-color: var(--primary-border);
+      color: var(--primary-dark);
+    }
     .sr-spread-btn {
       padding: 4px 10px;
       border-radius: 7px;
-      border: 1px solid var(--danger-border);
+      border: 1px solid currentColor;
       background: #fff;
-      color: var(--danger);
+      color: inherit;
       font-size: 0.74rem;
       font-weight: 700;
       cursor: pointer;
     }
     .sr-spread-btn:hover {
-      background: #fee2e2;
+      opacity: 0.85;
     }
     .sr-checkpoint-card {
       background: var(--card);
@@ -1253,6 +1258,39 @@
       background: var(--success-bg);
       color: var(--success);
       border: 1px solid var(--success-border);
+    }
+    .point-toggle-btn.is-empty {
+      border-color: var(--border);
+      background: #f8fafc;
+      color: var(--text-muted);
+    }
+    .point-toggle-btn.is-empty:hover {
+      background: #f1f5f9;
+      color: var(--text-sub);
+    }
+    .point-toggle-btn.has-note {
+      border-color: #f59e0b;
+      background: #fef3c7;
+      color: #92400e;
+    }
+    .point-note-editor {
+      width: 100%;
+      min-height: 76px;
+      border: 1px solid #fcd34d;
+      border-radius: 6px;
+      background: #ffffff;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.84rem;
+      line-height: 1.6;
+      padding: 8px 10px;
+      resize: vertical;
+      display: block;
+    }
+    .point-note-editor:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(29, 78, 216, 0.12);
     }
     .sr-start-btn {
       width: 100%;
@@ -4313,6 +4351,7 @@ const appState = {
   curveViewMode: "sawtooth",
   quizStats: {},
   openPoints: {},
+  userNotes: {},
   lastActiveDate: null
 };
 
@@ -4814,6 +4853,7 @@ function getPersistPayload() {
     mastery: appState.mastery,
     spacedCards: appState.spacedCards,
     quizStats: appState.quizStats,
+    userNotes: appState.userNotes,
     lastActiveDate: appState.lastActiveDate || getLocalDateString(),
     savedAt: new Date().toISOString()
   };
@@ -4871,6 +4911,7 @@ async function loadStateFromDB() {
     if (loaded.mastery && typeof loaded.mastery === "object") appState.mastery = loaded.mastery;
     if (loaded.spacedCards && typeof loaded.spacedCards === "object") appState.spacedCards = loaded.spacedCards;
     if (loaded.quizStats && typeof loaded.quizStats === "object") appState.quizStats = loaded.quizStats;
+    if (loaded.userNotes && typeof loaded.userNotes === "object") appState.userNotes = loaded.userNotes;
   }
 
   const todayStr = getLocalDateString();
@@ -4909,16 +4950,29 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
+function renderUserPointBoxHtml(itemId) {
+  const txt = (appState.userNotes && appState.userNotes[itemId]) ? String(appState.userNotes[itemId]) : "";
+  const hasNote = txt.trim().length > 0;
+  const isOpen = Boolean(appState.openPoints[itemId]);
+  const arrow = isOpen ? "▾" : "▸";
+  const label = hasNote ? `${arrow} メモあり` : `${arrow} ポイント（未記入）`;
+  const btnCls = hasNote ? "point-toggle-btn has-note" : "point-toggle-btn is-empty";
+  return `<div class="point-wrap">
+    <button type="button" class="${btnCls}" data-toggle-point="${itemId}" aria-expanded="${isOpen}"><span>${label}</span></button>
+    <div class="point-note ${isOpen ? "is-open" : ""}">
+      <textarea class="point-note-editor" data-note-input="${itemId}" placeholder="調べたことや覚え方のメモを記入（自動保存）">${escapeHtml(txt)}</textarea>
+    </div>
+  </div>`;
+}
+
 function isBlankAutoFocused(cardId, blankId) {
   const c = appState.spacedCards[cardId];
   if (!c) return false;
 
-  // 1. 前回一部ミスしたカードのピンポイント復習：前回正解済みだった空欄を緑開示し、苦手空欄だけ黒塗り（日をまたいでも維持）
   if (c.pinpointPassedBlanks && c.pinpointPassedBlanks[blankId]) {
     return true;
   }
 
-  // 2. 自動穴埋め調整（ONの場合）：2回連続正解済み（前回ミスなし）の空欄を自動緑開示
   if (!appState.adaptiveFocusEnabled) return false;
   if (!c.blankStats) return false;
   const bStat = c.blankStats[blankId];
@@ -4942,7 +4996,6 @@ function initTestCardBlanks(cardId) {
     appState.testCardAutoBlanks[bid] = isAuto;
     if (isAuto) autoCount++;
   });
-  // 安全弁：全空欄が自動緑開示になってしまう場合はテストにならないため全黒塗りに戻す
   if (bids.length > 0 && autoCount === bids.length) {
     bids.forEach((bid) => {
       appState.testCardBlanks[bid] = false;
@@ -5295,7 +5348,7 @@ function renderStepsView(subj) {
             </div>
           ` : ""}
 
-          ${it.note ? `<div class="point-wrap"><button type="button" class="point-toggle-btn" data-toggle-point="${it.id}" aria-expanded="${Boolean(appState.openPoints[it.id])}"><span>${appState.openPoints[it.id] ? "▾ ポイント" : "▸ ポイント"}</span></button><div class="point-note ${appState.openPoints[it.id] ? "is-open" : ""}">${it.note.replace(/\n/g, "<br>")}</div></div>` : ""}
+          ${renderUserPointBoxHtml(it.id)}
         </article>
       `;
     });
@@ -5811,7 +5864,7 @@ function renderDueReviewView() {
             ${renderGradeButtonsHtml(targetItem.id, true)}
           </div>
 
-          ${targetItem.note ? `<div class="point-wrap"><button type="button" class="point-toggle-btn" data-toggle-point="${targetItem.id}"><span>${appState.openPoints[targetItem.id] ? "▾ ポイント" : "▸ ポイント"}</span></button><div class="point-note ${appState.openPoints[targetItem.id] ? "is-open" : ""}">${targetItem.note.replace(/\n/g, "<br>")}</div></div>` : ""}
+          ${renderUserPointBoxHtml(targetItem.id)}
         </article>
       `;
     }
@@ -5843,13 +5896,19 @@ function renderDueReviewView() {
         <span>本日予定：<strong>${todayExactCount}件</strong></span>
         <span>期限超過：<strong style="color:var(--danger);">${overdueCount}件</strong></span>
       </div>
-      ${overdueCount >= 3 ? `
+      ${overdueCount >= 2 ? `
         <div class="sr-spread-bar">
-          <span>期限超過 ${overdueCount}件をならす：</span>
-          <button type="button" class="sr-spread-btn" data-spread-days="3">3日に分散</button>
-          <button type="button" class="sr-spread-btn" data-spread-days="5">5日に分散</button>
+          <span>期限超過 ${overdueCount}件を分散：</span>
+          <button type="button" class="sr-spread-btn" data-spread-days="3" data-spread-scope="overdue">3日に分散</button>
+          <button type="button" class="sr-spread-btn" data-spread-days="5" data-spread-scope="overdue">5日に分散</button>
         </div>
-      ` : ""}
+      ` : (dueAll.length >= 6 ? `
+        <div class="sr-spread-bar is-info">
+          <span>溜まった復習 ${dueAll.length}件を分散：</span>
+          <button type="button" class="sr-spread-btn" data-spread-days="3" data-spread-scope="due">3日に分散</button>
+          <button type="button" class="sr-spread-btn" data-spread-days="5" data-spread-scope="due">5日に分散</button>
+        </div>
+      ` : "")}
       <div style="display:flex;justify-content:center;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
         ${filterBtns}
       </div>
@@ -5986,7 +6045,6 @@ function applyCardReviewGrade(cardId, grade, isDueSession) {
     appState.mastery[cardId] = false;
   }
 
-  // 同STEPの兄弟カードを翌日へずらす（Bury Siblings）
   const buriedSiblings = [];
   if (grade >= 2 && appState.burySiblingsEnabled) {
     const myStepId = CARD_STEP_MAP[cardId];
@@ -6039,7 +6097,6 @@ function applyCardReviewGrade(cardId, grade, isDueSession) {
     } else if (appState.dueBatchLimit > 0 && appState.dueBatchDone >= appState.dueBatchLimit) {
       appState.dueBatchCheckpoint = true;
     } else {
-      // 再テストカードは自動でremainingの末尾に移動するため、常に先頭(0番目)が次のカードになる
       appState.dueIndex = 0;
     }
     renderApp();
@@ -6206,7 +6263,7 @@ function setupEventListeners() {
       return;
     }
 
-    // 4b. テスト内「全黒塗り」（緑開示を解除して全空欄をテスト）
+    // 4b. テスト内「全黒塗り」
     const resetBlanksBtn = e.target.closest("[data-test-reset-blanks]");
     if (resetBlanksBtn) {
       const cardId = resetBlanksBtn.getAttribute("data-test-reset-blanks");
@@ -6274,7 +6331,6 @@ function setupEventListeners() {
       });
       if (appState.undoStack.length > 15) appState.undoStack.shift();
 
-      // カード内の穴埋めの正誤を自動集計（開＝正解、黒塗り＝不正解）＆ 苦手空欄のピンポイント持ち越し
       if (cardEl) {
         const c = getCardRecord(cardId, appState.activeSubject);
         if (!c.blankStats) c.blankStats = {};
@@ -6312,17 +6368,14 @@ function setupEventListeners() {
         c.lastBlankAccuracy = allBids.length > 0 ? (openCnt / allBids.length) : 1.0;
 
         if (grade === 1 && !anyWrong) {
-          // すべて開けたまま「✕ もう一度」を押した場合は全箇所を再テスト対象（黒塗り）にする
           c.lastBlankAccuracy = 0.0;
           c.pinpointPassedBlanks = {};
           allBids.forEach((bid) => {
             appState.blanks[bid] = false;
           });
         } else if (anyWrong) {
-          // 一部ミスした空欄がある場合、正解済み空欄を次回テストまで緑開示で保持（日をまたいでも維持）
           c.pinpointPassedBlanks = passedThisRun;
         } else {
-          // 全空欄クリア時はピンポイント持ち越しを解除（以降は2連続正解による自動緑開示で管理）
           c.pinpointPassedBlanks = {};
         }
       }
@@ -6367,8 +6420,14 @@ function setupEventListeners() {
       if (wrap) {
         const noteEl = wrap.querySelector(".point-note");
         if (noteEl) noteEl.classList.toggle("is-open", nextOpen);
+        const hasNote = Boolean(appState.userNotes && appState.userNotes[itemId] && String(appState.userNotes[itemId]).trim().length > 0);
         pointBtn.setAttribute("aria-expanded", String(nextOpen));
-        pointBtn.innerHTML = `<span>${nextOpen ? "▾ ポイント" : "▸ ポイント"}</span>`;
+        pointBtn.className = hasNote ? "point-toggle-btn has-note" : "point-toggle-btn is-empty";
+        pointBtn.innerHTML = `<span>${nextOpen ? "▾" : "▸"} ${hasNote ? "メモあり" : "ポイント（未記入）"}</span>`;
+        if (nextOpen) {
+          const ta = wrap.querySelector(".point-note-editor");
+          if (ta) setTimeout(() => ta.focus(), 40);
+        }
       }
       return;
     }
@@ -6428,21 +6487,22 @@ function setupEventListeners() {
     const spreadBtn = e.target.closest("[data-spread-days]");
     if (spreadBtn) {
       const days = Math.max(2, Number(spreadBtn.getAttribute("data-spread-days") || 3));
+      const scope = spreadBtn.getAttribute("data-spread-scope") || "overdue";
       const todayStr = getLocalDateString();
-      const overdue = Object.values(appState.spacedCards)
-        .filter((c) => c.nextReviewDate && c.nextReviewDate < todayStr)
+      const targets = Object.values(appState.spacedCards)
+        .filter((c) => c.nextReviewDate && (scope === "due" ? c.nextReviewDate <= todayStr : c.nextReviewDate < todayStr))
         .sort((a, b) => {
           const efDiff = Number(a.efactor || 2.5) - Number(b.efactor || 2.5);
           if (efDiff !== 0) return efDiff;
           return Number(a.interval || 0) - Number(b.interval || 0);
         });
-      overdue.forEach((c, idx) => {
-        const offset = Math.floor((idx * days) / overdue.length);
+      targets.forEach((c, idx) => {
+        const offset = Math.floor((idx * days) / targets.length);
         c.nextReviewDate = addDaysToDateString(todayStr, offset);
       });
       saveStateToDB();
       renderApp();
-      showToast(`期限超過 ${overdue.length}件を今日から${days}日間に分散しました`);
+      showToast(`${targets.length}件の復習を今日から${days}日間に分散しました`);
       return;
     }
     if (e.target.closest("#btnToggleBurySiblings")) {
@@ -6575,6 +6635,34 @@ function setupEventListeners() {
     }
   });
 
+  // ポイントメモのリアルタイム自動保存＋未記入／メモあり切替
+  let noteSaveTimer = null;
+  document.getElementById("appContentArea").addEventListener("input", (e) => {
+    const ta = e.target.closest("[data-note-input]");
+    if (!ta) return;
+    const itemId = ta.getAttribute("data-note-input");
+    if (!itemId) return;
+    if (!appState.userNotes) appState.userNotes = {};
+    const val = ta.value;
+    if (val.trim().length > 0) {
+      appState.userNotes[itemId] = val;
+    } else {
+      delete appState.userNotes[itemId];
+    }
+    const wrap = ta.closest(".point-wrap");
+    if (wrap) {
+      const btn = wrap.querySelector("[data-toggle-point]");
+      if (btn) {
+        const hasNote = val.trim().length > 0;
+        const isOpen = Boolean(appState.openPoints[itemId]);
+        btn.className = hasNote ? "point-toggle-btn has-note" : "point-toggle-btn is-empty";
+        btn.innerHTML = `<span>${isOpen ? "▾" : "▸"} ${hasNote ? "メモあり" : "ポイント（未記入）"}</span>`;
+      }
+    }
+    if (noteSaveTimer) clearTimeout(noteSaveTimer);
+    noteSaveTimer = setTimeout(() => saveStateToDB(), 300);
+  });
+
   // ★データ管理モーダル（元の正常なID・クラスで100%動作保証）★
   const modal = document.getElementById("dataModal");
   document.getElementById("openDataModalBtn").addEventListener("click", () => {
@@ -6619,6 +6707,7 @@ function setupEventListeners() {
     appState.mastery = {};
     appState.spacedCards = {};
     appState.quizStats = {};
+    appState.userNotes = {};
     appState.showOnlyUnmastered = false;
     saveStateToDB();
     loadStateFromDB();
@@ -6679,6 +6768,7 @@ function setupEventListeners() {
           if (parsed.quizStats && typeof parsed.quizStats === "object") appState.quizStats = parsed.quizStats;
           if (parsed.activeSubject) appState.activeSubject = parsed.activeSubject;
           if (parsed.activeMode) appState.activeMode = parsed.activeMode;
+          if (parsed.userNotes && typeof parsed.userNotes === "object") appState.userNotes = parsed.userNotes;
           if (typeof parsed.adaptiveFocusEnabled === "boolean") appState.adaptiveFocusEnabled = parsed.adaptiveFocusEnabled;
           if (typeof parsed.burySiblingsEnabled === "boolean") appState.burySiblingsEnabled = parsed.burySiblingsEnabled;
           await saveStateToDB();
